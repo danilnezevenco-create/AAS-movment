@@ -1,0 +1,498 @@
+﻿==========================================
+FILE: gradle-wrapper.properties
+PATH: C:\Users\user\Desktop\mods\AAS movment\gradle\wrapper\gradle-wrapper.properties
+==========================================
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.8-bin.zip
+networkTimeout=10000
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+
+==========================================
+FILE: EntityPickMixin.java
+PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\java\com\danilfb123\aasmovement\mixin\EntityPickMixin.java
+==========================================
+package com.danilfb123.aasmovement.mixin;
+
+import com.danilfb123.aasmovement.CursorState;
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.Vec3;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Redirect;
+
+@Mixin(Entity.class)
+public class EntityPickMixin {
+
+    @Redirect(
+            method = "pick",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/world/entity/Entity;getViewVector(F)Lnet/minecraft/world/phys/Vec3;"
+            )
+    )
+    private Vec3 aasmovement$redirectViewVector(Entity self, float partialTick) {
+        if (self instanceof Player player && player.isCreative()) {
+            return self.getViewVector(partialTick);
+        }
+        if (self != Minecraft.getInstance().player) {
+            return self.getViewVector(partialTick);
+        }
+        return CursorState.getInterpolatedDirection(partialTick);
+    }
+}
+==========================================
+FILE: AASMovement.java
+PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\java\com\danilfb123\aasmovement\AASMovement.java
+==========================================
+package com.danilfb123.aasmovement;
+
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.fml.common.Mod;
+
+@Mod("aas_movement") // Р­С‚Рѕ ID РґРѕР»Р¶РµРЅ СЃРѕРІРїР°РґР°С‚СЊ СЃ С‚РµРј, С‡С‚Рѕ РІ mods.toml
+public class AASMovement {
+    public AASMovement() {
+        MinecraftForge.EVENT_BUS.register(new MovementHandler());
+    }
+}
+==========================================
+FILE: CursorState.java
+PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\java\com\danilfb123\aasmovement\CursorState.java
+==========================================
+package com.danilfb123.aasmovement;
+
+import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+/**
+ * РҐСЂР°РЅРёС‚ "РІРёСЂС‚СѓР°Р»СЊРЅРѕРµ" РЅР°РїСЂР°РІР»РµРЅРёРµ РїСЂРёС†РµР»Р°, РєРѕС‚РѕСЂРѕРµ СЃ Р·Р°РґРµСЂР¶РєРѕР№ СЃР»РµРґСѓРµС‚ Р·Р°
+ * СЂРµР°Р»СЊРЅС‹Рј РЅР°РїСЂР°РІР»РµРЅРёРµРј РєР°РјРµСЂС‹ РёРіСЂРѕРєР° (СЂРµР°Р»СЊРЅС‹РјРё yaw/pitch).
+ *
+ * РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ:
+ *  - MovementHandler#onRenderCrosshair вЂ” С‡С‚РѕР±С‹ РЅР°СЂРёСЃРѕРІР°С‚СЊ СЃРјРµС‰С‘РЅРЅРѕРµ РїРµСЂРµРєСЂРµСЃС‚РёРµ;
+ *  - MinecraftMixin вЂ” С‡С‚РѕР±С‹ СЂРµР°Р»СЊРЅС‹Р№ СЂРµР№РєР°СЃС‚ (РЅР°РІРµРґРµРЅРёРµ/Р»РѕРјР°РЅРёРµ/РІР·Р°РёРјРѕРґРµР№СЃС‚РІРёРµ/Р°С‚Р°РєР°)
+ *    С€С‘Р» РёРјРµРЅРЅРѕ РїРѕ СЌС‚РѕРјСѓ, РѕС‚СЃС‚Р°СЋС‰РµРјСѓ, РЅР°РїСЂР°РІР»РµРЅРёСЋ, Р° РЅРµ РїРѕ РЅР°РїСЂР°РІР»РµРЅРёСЋ СЂРµР°Р»СЊРЅРѕР№ РєР°РјРµСЂС‹.
+ */
+public class CursorState {
+
+    // РќР°СЃРєРѕР»СЊРєРѕ Р±С‹СЃС‚СЂРѕ РїСЂРёС†РµР» "РґРѕРіРѕРЅСЏРµС‚" РєР°РјРµСЂСѓ Р·Р° С‚РёРє.
+    // РњРµРЅСЊС€Рµ Р·РЅР°С‡РµРЅРёРµ -> Р±РѕР»СЊС€Рµ РѕС‰СѓС‰Р°РµРјР°СЏ Р·Р°РґРµСЂР¶РєР°.
+    // Р’Р Р•РњР•РќРќРћ РІС‹СЃС‚Р°РІР»РµРЅРѕ РћР§Р•РќР¬ РјР°Р»РµРЅСЊРєРѕРµ Р·РЅР°С‡РµРЅРёРµ РґР»СЏ С‚РµСЃС‚Р° вЂ” РїСЂРёС†РµР»
+    // Р±СѓРґРµС‚ РґРѕРіРѕРЅСЏС‚СЊ РєР°РјРµСЂСѓ СЃРµРєСѓРЅРґС‹ 2-3, СЌС„С„РµРєС‚ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РЅРµРІРѕР·РјРѕР¶РЅРѕ РЅРµ Р·Р°РјРµС‚РёС‚СЊ.
+    public static float catchUpSpeed = 0.02f;
+
+    public static float cursorYaw = 0.0f;
+    public static float cursorPitch = 0.0f;
+    public static float prevCursorYaw = 0.0f;
+    public static float prevCursorPitch = 0.0f;
+
+    private static boolean initialized = false;
+
+    private static final Logger LOGGER = LogManager.getLogger("AASMovement/CursorState");
+    private static int debugTickCounter = 0;
+
+    /** Р’С‹Р·С‹РІР°С‚СЊ СЂР°Р· РІ С‚РёРє РёР· MovementHandler СЃ СЂРµР°Р»СЊРЅС‹РјРё СѓРіР»Р°РјРё РёРіСЂРѕРєР°. */
+    public static void tick(float realYaw, float realPitch) {
+        prevCursorYaw = cursorYaw;
+        prevCursorPitch = cursorPitch;
+
+        // DEBUG: СЂР°Р· РІ СЃРµРєСѓРЅРґСѓ РїРµС‡Р°С‚Р°РµРј РІ Р»РѕРі, С‡С‚Рѕ РјРµС‚РѕРґ РІРѕРѕР±С‰Рµ РІС‹Р·С‹РІР°РµС‚СЃСЏ,
+        // Рё РЅР°СЃРєРѕР»СЊРєРѕ СЃРёР»СЊРЅРѕ cursorYaw РѕС‚СЃС‚Р°С‘С‚ РѕС‚ realYaw. Р•СЃР»Рё СЌС‚РёС… СЃС‚СЂРѕРє
+        // РЅРµС‚ РІ Р»РѕРіРµ (latest.log) РІРѕРѕР±С‰Рµ вЂ” Р·РЅР°С‡РёС‚ onClientTick/CursorState.tick
+        // РЅРµ РІС‹Р·С‹РІР°РµС‚СЃСЏ (РїСЂРѕР±Р»РµРјР° РІ СЂРµРіРёСЃС‚СЂР°С†РёРё РёРІРµРЅС‚Р°), Р° РЅРµ РІ РјРёРєСЃРёРЅРµ.
+        debugTickCounter++;
+        if (debugTickCounter % 20 == 0) {
+            LOGGER.info("[AASMovement DEBUG] realYaw={}, cursorYaw={}, delta={}",
+                    realYaw, cursorYaw, Mth.wrapDegrees(realYaw - cursorYaw));
+        }
+
+        if (!initialized) {
+            // РџРµСЂРІС‹Р№ С‚РёРє РїРѕСЃР»Рµ Р·Р°С…РѕРґР° РІ РјРёСЂ/СЂРµСЃРїР°РІРЅР° вЂ” РЅРµ РґР°С‘Рј РїСЂРёС†РµР»Сѓ "Р»РµС‚РµС‚СЊ" РёР·РґР°Р»РµРєР°.
+            cursorYaw = realYaw;
+            cursorPitch = realPitch;
+            prevCursorYaw = realYaw;
+            prevCursorPitch = realPitch;
+            initialized = true;
+            return;
+        }
+
+        cursorYaw = lerpAngle(catchUpSpeed, cursorYaw, realYaw);
+        cursorPitch = Mth.lerp(catchUpSpeed, cursorPitch, realPitch);
+    }
+
+    /** РЎР±СЂРѕСЃРёС‚СЊ СЃРѕСЃС‚РѕСЏРЅРёРµ (РЅР°РїСЂРёРјРµСЂ, РїСЂРё РІС‹С…РѕРґРµ РёР· РјРёСЂР°), С‡С‚РѕР±С‹ РЅРµ С‚СЏРЅСѓС‚СЊ СЃС‚Р°СЂС‹Рµ СѓРіР»С‹. */
+    public static void reset() {
+        initialized = false;
+    }
+
+    private static float lerpAngle(float factor, float current, float target) {
+        float delta = Mth.wrapDegrees(target - current);
+        return current + delta * factor;
+    }
+
+    public static float getInterpolatedYaw(float partialTick) {
+        return Mth.lerp(partialTick, prevCursorYaw, cursorYaw);
+    }
+
+    public static float getInterpolatedPitch(float partialTick) {
+        return Mth.lerp(partialTick, prevCursorPitch, cursorPitch);
+    }
+
+    /** РРЅС‚РµСЂРїРѕР»РёСЂРѕРІР°РЅРЅРѕРµ РјРµР¶РґСѓ С‚РёРєР°РјРё РЅР°РїСЂР°РІР»РµРЅРёРµ РІР·РіР»СЏРґР° "РїСЂРёС†РµР»Р°" (РґР»СЏ СЂРµР№РєР°СЃС‚Р°). */
+    public static Vec3 getInterpolatedDirection(float partialTick) {
+        float yaw = getInterpolatedYaw(partialTick);
+        float pitch = getInterpolatedPitch(partialTick);
+        return calculateViewVector(pitch, yaw);
+    }
+
+    // РљРѕРїРёСЏ С„РѕСЂРјСѓР»С‹ Entity#calculateViewVector вЂ” РїРµСЂРµРІРѕРґРёС‚ yaw/pitch РІ РµРґРёРЅРёС‡РЅС‹Р№ РІРµРєС‚РѕСЂ РЅР°РїСЂР°РІР»РµРЅРёСЏ.
+    private static Vec3 calculateViewVector(float pitch, float yaw) {
+        float f = pitch * ((float) Math.PI / 180F);
+        float f1 = -yaw * ((float) Math.PI / 180F);
+        float f2 = Mth.cos(f1);
+        float f3 = Mth.sin(f1);
+        float f4 = Mth.cos(f);
+        float f5 = Mth.sin(f);
+        return new Vec3((double) (f3 * f4), (double) (-f5), (double) (f2 * f4));
+    }
+}
+==========================================
+FILE: MovementHandler.java
+PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\java\com\danilfb123\aasmovement\MovementHandler.java
+==========================================
+package com.danilfb123.aasmovement;
+
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraftforge.client.event.RenderGuiOverlayEvent;
+import net.minecraftforge.client.event.ViewportEvent;
+import net.minecraftforge.client.gui.overlay.VanillaGuiOverlay;
+import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+
+public class MovementHandler {
+    // --- Р¤РР—РРљРђ ---
+    private float fatigue = 0.0f;
+    private float currentTilt = 0.0f;
+    private float prevTilt = 0.0f;
+    private float landingStun = 0.0f;
+    private float swayTime = 0.0f;
+    private boolean wasInAir = false;
+
+    // --- РРќРўР•Р Р¤Р•Р™РЎ ---
+    private int hotbarTimer = 0;
+    private int lastSelectedSlot = -1;
+
+    // Р Р°Р·РґРµР»СЏРµРј Р°РЅРёРјР°С†РёСЋ РїРѕСЏРІР»РµРЅРёСЏ: РѕС‚РґРµР»СЊРЅРѕ Р°Р»СЊС„Р° (РїСЂРѕР·СЂР°С‡РЅРѕСЃС‚СЊ) Рё РїРѕР·РёС†РёСЏ (РІС‹РµР·Рґ)
+    private float hotbarAlpha = 0.0f, prevHotbarAlpha = 0.0f;
+    private float hotbarSlide = 0.0f, prevHotbarSlide = 0.0f;
+
+    private float[] slotH = new float[9], prevSlotH = new float[9];
+
+    @SubscribeEvent
+    public void onClientTick(TickEvent.ClientTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        Player player = mc.player;
+        if (player == null) return;
+
+        // --- Р”Р’РР–Р•РќРР• ---
+        prevTilt = currentTilt;
+        currentTilt = Mth.lerp(0.12f, currentTilt, -player.xxa * 1.33f);
+        if (player.onGround()) {
+            if (wasInAir) { landingStun = 0.65f; wasInAir = false; }
+            player.setDeltaMovement(player.getDeltaMovement().multiply(0.95, 1.0, 0.95));
+        } else { wasInAir = true; }
+        if (landingStun > 0.01f) {
+            float slow = 1.0f - (landingStun * 0.45f);
+            player.setDeltaMovement(player.getDeltaMovement().multiply(slow, 1.0, slow));
+            landingStun *= 0.88f;
+        }
+        fatigue = (player.isSprinting() && player.zza != 0) ? Math.min(fatigue + 0.012f, 1.0f) : Math.max(fatigue - 0.008f, 0.0f);
+
+        // --- РћРўРЎРўРђР®Р©Р•Р• РќРђРџР РђР’Р›Р•РќРР• РџР РР¦Р•Р›Рђ ---
+        // Р РµР°Р»СЊРЅС‹Рµ С‚РµРєСѓС‰РёРµ СѓРіР»С‹ РєР°РјРµСЂС‹ РёРіСЂРѕРєР°. cursorYaw/cursorPitch РІ CursorState
+        // Р±СѓРґСѓС‚ "РґРѕРіРѕРЅСЏС‚СЊ" РёС… СЃ Р·Р°РґРµСЂР¶РєРѕР№, Рё РёРјРµРЅРЅРѕ РѕРЅРё СЂРµР°Р»СЊРЅРѕ РёСЃРїРѕР»СЊР·СѓСЋС‚СЃСЏ
+        // РїСЂРё СЂРµР№РєР°СЃС‚Рµ (СЃРј. MinecraftMixin).
+        CursorState.tick(player.getYRot(), player.getXRot());
+
+        // --- Р›РћР“РРљРђ РРќРўР•Р Р¤Р•Р™РЎРђ ---
+        int currentSlot = player.getInventory().selected;
+        if (currentSlot != lastSelectedSlot) {
+            hotbarTimer = 50;
+            lastSelectedSlot = currentSlot;
+        }
+        if (hotbarTimer > 0) hotbarTimer--;
+
+        prevHotbarAlpha = hotbarAlpha;
+        prevHotbarSlide = hotbarSlide;
+
+        // 1) Р’ РєСЂРµР°С‚РёРІРµ С…РѕС‚Р±Р°СЂ РІРёРґРЅРѕ РІСЃРµРіРґР°
+        boolean shouldShow = (hotbarTimer > 0 || player.isCreative());
+
+        if (shouldShow) {
+            // 2) РЎСЂР°Р·Сѓ РЅР° РЅСѓР¶РЅРѕРј РјРµСЃС‚Рµ, РЅРѕ Р±С‹СЃС‚СЂРѕ РІС‹С…РѕРґРёС‚ РёР· Р°Р»СЊС„С‹ (0.35f РґР»СЏ СЃРєРѕСЂРѕСЃС‚Рё)
+            hotbarSlide = 1.0f;
+            hotbarAlpha = Mth.lerp(0.35f, hotbarAlpha, 1.0f);
+        } else {
+            // РЈС…РѕРґРёС‚ РїР»Р°РІРЅРѕ РІРЅРёР· (РєР°Рє Р±С‹Р»Рѕ)
+            hotbarSlide = Mth.lerp(0.12f, hotbarSlide, 0.0f);
+            hotbarAlpha = Mth.lerp(0.12f, hotbarAlpha, 0.0f);
+        }
+
+        // РђРЅРёРјР°С†РёСЏ РїСЂС‹Р¶РєР° РІС‹Р±СЂР°РЅРЅРѕРіРѕ СЃР»РѕС‚Р° РѕСЃС‚Р°Р»Р°СЃСЊ Р±РµР· РёР·РјРµРЅРµРЅРёР№
+        for (int i = 0; i < 9; i++) {
+            prevSlotH[i] = slotH[i];
+            float targetH = (i == currentSlot) ? 10.0f : 0.0f;
+            slotH[i] = Mth.lerp(0.4f, slotH[i], targetH);
+        }
+    }
+
+    @SubscribeEvent
+    public void onRenderGuiPre(RenderGuiOverlayEvent.Pre event) {
+        var id = event.getOverlay().id();
+        if (id.equals(VanillaGuiOverlay.PLAYER_HEALTH.id()) ||
+                id.equals(VanillaGuiOverlay.FOOD_LEVEL.id()) ||
+                id.equals(VanillaGuiOverlay.HOTBAR.id()) ||
+                id.equals(VanillaGuiOverlay.EXPERIENCE_BAR.id()) ||
+                id.equals(VanillaGuiOverlay.ARMOR_LEVEL.id())) {
+            event.setCanceled(true);
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (id.equals(VanillaGuiOverlay.CROSSHAIR.id()) && mc.player != null && !mc.player.isCreative()) {
+            event.setCanceled(true);
+        }
+    }
+
+    /**
+     * Р РёСЃСѓРµРј СЃРѕР±СЃС‚РІРµРЅРЅРѕРµ РїРµСЂРµРєСЂРµСЃС‚РёРµ СЃРѕ СЃРјРµС‰РµРЅРёРµРј, РѕС‚СЂР°Р¶Р°СЋС‰РёРј СЂР°Р·РЅРёС†Сѓ РјРµР¶РґСѓ
+     * СЂРµР°Р»СЊРЅС‹Рј РЅР°РїСЂР°РІР»РµРЅРёРµРј РєР°РјРµСЂС‹ Рё "РѕС‚СЃС‚Р°СЋС‰РёРј" РЅР°РїСЂР°РІР»РµРЅРёРµРј РїСЂРёС†РµР»Р° (CursorState).
+     * Р’Р°РЅРёР»СЊРЅРѕРµ РїРµСЂРµРєСЂРµСЃС‚РёРµ РґР»СЏ survival РѕС‚РјРµРЅРµРЅРѕ РІ onRenderGuiPre, РїРѕСЌС‚РѕРјСѓ
+     * СЂРёСЃСѓРµРј РїРѕРІРµСЂС… РµРіРѕ РјРµСЃС‚Р° РІ Post-СЃРѕР±С‹С‚РёРё С‚РѕРіРѕ Р¶Рµ РѕРІРµСЂР»РµСЏ.
+     */
+    @SubscribeEvent
+    public void onRenderCrosshair(RenderGuiOverlayEvent.Post event) {
+        if (!event.getOverlay().id().equals(VanillaGuiOverlay.CROSSHAIR.id())) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return;
+        if (mc.player.isCreative()) return; // РІ РєСЂРµР°С‚РёРІРµ РІР°РЅРёР»СЊРЅС‹Р№ РєСЂРµСЃС‚РёРє РЅРµ РѕС‚РјРµРЅСЏР»СЃСЏ вЂ” РЅРµ РґСѓР±Р»РёСЂСѓРµРј
+
+        float pt = event.getPartialTick();
+
+        float camYaw = Mth.lerp(pt, mc.player.yRotO, mc.player.getYRot());
+        float camPitch = Mth.lerp(pt, mc.player.xRotO, mc.player.getXRot());
+        float curYaw = CursorState.getInterpolatedYaw(pt);
+        float curPitch = CursorState.getInterpolatedPitch(pt);
+
+        float deltaYaw = Mth.wrapDegrees(curYaw - camYaw);
+        float deltaPitch = curPitch - camPitch;
+
+        double fov = mc.options.fov().get();
+        double halfFovRad = Math.toRadians(fov / 2.0);
+
+        int screenWidth = mc.getWindow().getGuiScaledWidth();
+        int screenHeight = mc.getWindow().getGuiScaledHeight();
+
+        // РџСЂРёР±Р»РёР·РёС‚РµР»СЊРЅР°СЏ РїСЂРѕРµРєС†РёСЏ СѓРіР»Р° РІ РїРёРєСЃРµР»Рё (РІРµСЂС‚РёРєР°Р»СЊРЅС‹Р№ FOV РєР°Рє Р±Р°Р·Р° РґР»СЏ РѕР±РµРёС… РѕСЃРµР№;
+        // РґР»СЏ РЅРµР±РѕР»СЊС€РёС… СЃРјРµС‰РµРЅРёР№ РёСЃРєР°Р¶РµРЅРёРµ РїРѕ РєСЂР°СЏРј СЌРєСЂР°РЅР° РЅРµСЃСѓС‰РµСЃС‚РІРµРЅРЅРѕ).
+        double pxPerRadian = (screenHeight / 2.0) / Math.tan(halfFovRad);
+
+        int offsetX = (int) (Math.tan(Math.toRadians(deltaYaw)) * pxPerRadian);
+        int offsetY = (int) (-Math.tan(Math.toRadians(deltaPitch)) * pxPerRadian);
+
+        int cx = screenWidth / 2 + offsetX;
+        int cy = screenHeight / 2 + offsetY;
+
+        GuiGraphics gui = event.getGuiGraphics();
+        int size = 4;
+        int thickness = 1;
+        int color = 0xCCFFFFFF;
+
+        gui.fill(cx - size, cy - thickness, cx + size, cy + thickness, color);
+        gui.fill(cx - thickness, cy - size, cx + thickness, cy + size, color);
+    }
+
+    @SubscribeEvent
+    public void onRenderGuiPost(RenderGuiOverlayEvent.Post event) {
+        if (!event.getOverlay().id().equals(VanillaGuiOverlay.CHAT_PANEL.id())) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return;
+
+        float pt = event.getPartialTick();
+        float renderAlpha = Mth.lerp(pt, prevHotbarAlpha, hotbarAlpha);
+        float renderSlide = Mth.lerp(pt, prevHotbarSlide, hotbarSlide);
+
+        if (renderAlpha <= 0.001f) return;
+
+        GuiGraphics gui = event.getGuiGraphics();
+        int screenWidth = mc.getWindow().getGuiScaledWidth();
+        int screenHeight = mc.getWindow().getGuiScaledHeight();
+
+        int slotSize = 22;
+        int gap = 4;
+        int totalWidth = 9 * (slotSize + gap);
+        int startX = (screenWidth - totalWidth) / 2;
+
+        // РџРѕР·РёС†РёСЏ Y Р·Р°РІРёСЃРёС‚ РѕС‚ РІС‹РµР·РґР°
+        float baseY = (screenHeight + 40) - (renderSlide * 72);
+
+        // Р¦РІРµС‚ Р·Р°РІРёСЃРёС‚ РѕС‚ Р°Р»СЊС„С‹
+        int alpha = (int)(renderAlpha * 200);
+        int color = (alpha << 24);
+
+        for (int i = 0; i < 9; i++) {
+            int x = startX + i * (slotSize + gap);
+            float currentH = Mth.lerp(pt, prevSlotH[i], slotH[i]);
+            float y = baseY - currentH;
+
+            // Р РёСЃСѓРµРј С„РѕРЅ СЃР»РѕС‚Р°
+            gui.fill(x, (int)y, x + slotSize, (int)y + slotSize, color);
+
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            if (!stack.isEmpty()) {
+                gui.renderItem(stack, x + 3, (int)y + 3);
+                gui.renderItemDecorations(mc.font, stack, x + 3, (int)y + 3);
+            }
+        }
+    }
+
+    @SubscribeEvent
+    public void onCameraSetup(ViewportEvent.ComputeCameraAngles event) {
+        float pt = (float) event.getPartialTick();
+        event.setRoll(event.getRoll() + Mth.lerp(pt, prevTilt, currentTilt));
+        swayTime += (pt * 0.035f);
+        if (fatigue > 0.01f) {
+            float amp = fatigue * 0.8f;
+            event.setYaw(event.getYaw() + (float)(Math.sin(swayTime) + Math.sin(swayTime * 0.45f)) * amp);
+            event.setPitch(event.getPitch() + (float)(Math.cos(swayTime * 0.65f) + Math.cos(swayTime * 0.25f)) * (amp * 0.5f));
+        }
+    }
+
+    @SubscribeEvent
+    public void onFOVUpdate(ViewportEvent.ComputeFov event) {
+        Player p = Minecraft.getInstance().player;
+        if (p != null && p.isSprinting()) {
+            event.setFOV(event.getFOV() + ((float) p.getDeltaMovement().horizontalDistance() * 12.0f));
+        }
+    }
+}
+==========================================
+FILE: mods.toml
+PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\resources\META-INF\mods.toml
+==========================================
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+
+[[mods]]
+modId="aas_movement"
+version="1.0.0"
+displayName="AAS Movement"
+authors="danilfb123"
+
+[[mixins]]
+config="aas_movement.mixins.json"
+==========================================
+FILE: aas_movement.mixins.json
+PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\resources\aas_movement.mixins.json
+==========================================
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.danilfb123.aasmovement.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "aas_movement.refmap.json",
+  "mixins": [
+    "EntityPickMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
+==========================================
+FILE: pack.mcmeta
+PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\resources\pack.mcmeta
+==========================================
+{
+  "pack": {
+    "description": {
+      "text": "${mod_id} resources"
+    },
+    "pack_format": 15
+  }
+}
+==========================================
+FILE: gradle.properties
+PATH: C:\Users\user\Desktop\mods\AAS movment\gradle.properties
+==========================================
+# Sets default memory used for gradle commands. Can be overridden by user or command line properties.
+# This is required to provide enough memory for the Minecraft decompilation process.
+org.gradle.jvmargs=-Xmx3G
+org.gradle.daemon=false
+
+
+## Environment Properties
+
+# The Minecraft version must agree with the Forge version to get a valid artifact
+minecraft_version=1.20.1
+# The Minecraft version range can use any release version of Minecraft as bounds.
+# Snapshots, pre-releases, and release candidates are not guaranteed to sort properly
+# as they do not follow standard versioning conventions.
+minecraft_version_range=[1.20.1,1.21)
+# The Forge version must agree with the Minecraft version to get a valid artifact
+forge_version=47.4.10
+# The Forge version range can use any version of Forge as bounds or match the loader version range
+forge_version_range=[47,)
+# The loader version range can only use the major version of Forge/FML as bounds
+loader_version_range=[47,)
+# The mapping channel to use for mappings.
+# The default set of supported mapping channels are ["official", "snapshot", "snapshot_nodoc", "stable", "stable_nodoc"].
+# Additional mapping channels can be registered through the "channelProviders" extension in a Gradle plugin.
+#
+# | Channel   | Version              |                                                                                |
+# |-----------|----------------------|--------------------------------------------------------------------------------|
+# | official  | MCVersion            | Official field/method names from Mojang mapping files                          |
+# | parchment | YYYY.MM.DD-MCVersion | Open community-sourced parameter names and javadocs layered on top of official |
+#
+# You must be aware of the Mojang license when using the 'official' or 'parchment' mappings.
+# See more information here: https://github.com/MinecraftForge/MCPConfig/blob/master/Mojang.md
+#
+# Parchment is an unofficial project maintained by ParchmentMC, separate from Minecraft Forge.
+# Additional setup is needed to use their mappings, see https://parchmentmc.org/docs/getting-started
+mapping_channel=official
+# The mapping version to query from the mapping channel.
+# This must match the format required by the mapping channel.
+mapping_version=1.20.1
+
+
+## Mod Properties
+
+# The unique mod identifier for the mod. Must be lowercase in English locale. Must fit the regex [a-z][a-z0-9_]{1,63}
+# Must match the String constant located in the main mod class annotated with @Mod.
+mod_id=examplemod
+# The human-readable display name for the mod.
+mod_name=Example Mod
+# The license of the mod. Review your options at https://choosealicense.com/. All Rights Reserved is the default.
+mod_license=All Rights Reserved
+# The mod version. See https://semver.org/
+mod_version=1.0.0
+# The group ID for the mod. It is only important when publishing as an artifact to a Maven repository.
+# This should match the base package used for the mod sources.
+# See https://maven.apache.org/guides/mini/guide-naming-conventions.html
+mod_group_id=com.example.examplemod
+# The authors of the mod. This is a simple text string that is used for display purposes in the mod list.
+mod_authors=YourNameHere, OtherNameHere
+# The description of the mod. This is a simple multiline text string that is used for display purposes in the mod list.
+mod_description=Example mod description.\nNewline characters can be used and will be replaced properly.

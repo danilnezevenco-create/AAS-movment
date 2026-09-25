@@ -1,0 +1,12 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+
+[[mods]]
+modId="aas_movement"
+version="1.0.0"
+displayName="AAS Movement"
+authors="danilfb123"
+
+[[mixins]]
+config="aas_movement.mixins.json"
