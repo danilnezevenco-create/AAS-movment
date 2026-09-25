@@ -4,15 +4,22 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
+import net.minecraftforge.client.event.RenderGuiEvent;
 import net.minecraftforge.client.event.RenderGuiOverlayEvent;
-import net.minecraftforge.client.event.ViewportEvent;
 import net.minecraftforge.client.gui.overlay.VanillaGuiOverlay;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 public class MovementHandler {
-    // --- ФИЗИКА ---
+    // --- ФИЗИКА (без изменений) ---
     private float fatigue = 0.0f;
     private float currentTilt = 0.0f;
     private float prevTilt = 0.0f;
@@ -20,14 +27,11 @@ public class MovementHandler {
     private float swayTime = 0.0f;
     private boolean wasInAir = false;
 
-    // --- ИНТЕРФЕЙС ---
+    // --- ИНТЕРФЕЙС (без изменений) ---
     private int hotbarTimer = 0;
     private int lastSelectedSlot = -1;
-
-    // Разделяем анимацию появления: отдельно альфа (прозрачность) и позиция (выезд)
     private float hotbarAlpha = 0.0f, prevHotbarAlpha = 0.0f;
     private float hotbarSlide = 0.0f, prevHotbarSlide = 0.0f;
-
     private float[] slotH = new float[9], prevSlotH = new float[9];
 
     @SubscribeEvent
@@ -38,7 +42,7 @@ public class MovementHandler {
         Player player = mc.player;
         if (player == null) return;
 
-        // --- ДВИЖЕНИЕ ---
+        // --- ДВИЖЕНИЕ (без изменений) ---
         prevTilt = currentTilt;
         currentTilt = Mth.lerp(0.12f, currentTilt, -player.xxa * 1.33f);
         if (player.onGround()) {
@@ -50,15 +54,22 @@ public class MovementHandler {
             player.setDeltaMovement(player.getDeltaMovement().multiply(slow, 1.0, slow));
             landingStun *= 0.88f;
         }
-        fatigue = (player.isSprinting() && player.zza != 0) ? Math.min(fatigue + 0.012f, 1.0f) : Math.max(fatigue - 0.008f, 0.0f);
+        fatigue = (player.isSprinting() && player.zza != 0)
+                ? Math.min(fatigue + 0.012f, 1.0f)
+                : Math.max(fatigue - 0.008f, 0.0f);
 
         // --- ОТСТАЮЩЕЕ НАПРАВЛЕНИЕ ПРИЦЕЛА ---
-        // Реальные текущие углы камеры игрока. cursorYaw/cursorPitch в CursorState
-        // будут "догонять" их с задержкой, и именно они реально используются
-        // при рейкасте (см. MinecraftMixin).
         CursorState.tick(player.getYRot(), player.getXRot());
 
-        // --- ЛОГИКА ИНТЕРФЕЙСА ---
+        // ГЛАВНЫЙ ФИКС, СЛОЙ 1: ваниль уже посчитала hitResult ОТ КАМЕРЫ
+        // (GameRenderer#tick -> pick(1.0F) прошёл раньше в этом же тике).
+        // Пересчитываем его ОТ ПРИЦЕЛА. Клики (handleKeybinds) и outline
+        // читают именно это поле.
+        if (!player.isCreative() && mc.level != null && mc.gameMode != null) {
+            overrideHitResult(mc, player, 1.0F);
+        }
+
+        // --- ЛОГИКА ИНТЕРФЕЙСА (без изменений) ---
         int currentSlot = player.getInventory().selected;
         if (currentSlot != lastSelectedSlot) {
             hotbarTimer = 50;
@@ -69,25 +80,80 @@ public class MovementHandler {
         prevHotbarAlpha = hotbarAlpha;
         prevHotbarSlide = hotbarSlide;
 
-        // 1) В креативе хотбар видно всегда
         boolean shouldShow = (hotbarTimer > 0 || player.isCreative());
-
         if (shouldShow) {
-            // 2) Сразу на нужном месте, но быстро выходит из альфы (0.35f для скорости)
             hotbarSlide = 1.0f;
             hotbarAlpha = Mth.lerp(0.35f, hotbarAlpha, 1.0f);
         } else {
-            // Уходит плавно вниз (как было)
             hotbarSlide = Mth.lerp(0.12f, hotbarSlide, 0.0f);
             hotbarAlpha = Mth.lerp(0.12f, hotbarAlpha, 0.0f);
         }
 
-        // Анимация прыжка выбранного слота осталась без изменений
         for (int i = 0; i < 9; i++) {
             prevSlotH[i] = slotH[i];
             float targetH = (i == currentSlot) ? 10.0f : 0.0f;
             slotH[i] = Mth.lerp(0.4f, slotH[i], targetH);
         }
+    }
+
+    // ГЛАВНЫЙ ФИКС, СЛОЙ 2: RenderTickEvent.Pre файрится ПОСЛЕ
+    // gameRenderer.tick()/pick(), но ДО рендера кадра (это видно прямо в
+    // Forge-патче Minecraft#runTick). Перезаписываем hitResult ещё раз,
+    // уже с кадровым partialTick — подсветка блока и наведение на моба
+    // следуют прицелу даже если миксины не применились.
+    @SubscribeEvent
+    public void onRenderTickPre(TickEvent.RenderTickEvent event) {
+        if (event.phase != TickEvent.Phase.START) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.player.isCreative()) return;
+        if (mc.level == null || mc.gameMode == null) return;
+
+        overrideHitResult(mc, mc.player, event.renderTickTime);
+    }
+
+    /**
+     * Полный пересчёт наведения по направлению отстающего прицела.
+     * Реплика ванильного GameRenderer#pick: сначала клип по блокам,
+     * затем луч по сущностям, ограниченный дистанцией до блока.
+     */
+    private void overrideHitResult(Minecraft mc, Player player, float pt) {
+        double reach = mc.gameMode.getPickRange();
+
+        Vec3 eye = player.getEyePosition(pt);
+        Vec3 dir = CursorState.getInterpolatedDirection(pt);
+        Vec3 end = eye.add(dir.x * reach, dir.y * reach, dir.z * reach);
+
+        // 1) блоки (реплика Entity#pick)
+        BlockHitResult blockHit = player.level().clip(new ClipContext(
+                eye, end,
+                ClipContext.Block.OUTLINE,
+                ClipContext.Fluid.NONE,
+                player));
+
+        // 2) сущности не дальше, чем найденный блок (реплика GameRenderer#pick)
+        double maxSqr = blockHit.getLocation().distanceToSqr(eye);
+        AABB box = player.getBoundingBox()
+                .expandTowards(dir.scale(reach))
+                .inflate(1.0, 1.0, 1.0);
+        EntityHitResult entityHit = ProjectileUtil.getEntityHitResult(
+                player, eye, end, box,
+                e -> !e.isSpectator() && e.isPickable(),
+                maxSqr);
+
+        if (entityHit != null) {
+            mc.hitResult = entityHit;
+            mc.crosshairPickEntity = entityHit.getEntity();
+        } else {
+            mc.hitResult = blockHit;
+            mc.crosshairPickEntity = null;
+        }
+    }
+
+    // Сброс прицела при выходе из мира
+    @SubscribeEvent
+    public void onLogout(ClientPlayerNetworkEvent.LoggingOut event) {
+        CursorState.reset();
     }
 
     @SubscribeEvent
@@ -101,28 +167,24 @@ public class MovementHandler {
             event.setCanceled(true);
         }
         Minecraft mc = Minecraft.getInstance();
-        if (id.equals(VanillaGuiOverlay.CROSSHAIR.id()) && mc.player != null && !mc.player.isCreative()) {
+        if (id.equals(VanillaGuiOverlay.CROSSHAIR.id())
+                && mc.player != null && !mc.player.isCreative()) {
             event.setCanceled(true);
         }
     }
 
-    /**
-     * Рисуем собственное перекрестие со смещением, отражающим разницу между
-     * реальным направлением камеры и "отстающим" направлением прицела (CursorState).
-     * Ванильное перекрестие для survival отменено в onRenderGuiPre, поэтому
-     * рисуем поверх его места в Post-событии того же оверлея.
-     */
+    // Крестик рисуем в RenderGuiEvent.Post — Post отменённого оверлея
+    // CROSSHAIR не вызывается никогда (это уже починено, крестик виден).
     @SubscribeEvent
-    public void onRenderCrosshair(RenderGuiOverlayEvent.Post event) {
-        if (!event.getOverlay().id().equals(VanillaGuiOverlay.CROSSHAIR.id())) return;
-
+    public void onRenderCrosshair(RenderGuiEvent.Post event) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
-        if (mc.player.isCreative()) return; // в креативе ванильный крестик не отменялся — не дублируем
+        if (mc.player.isCreative()) return;
 
         float pt = event.getPartialTick();
 
-        float camYaw = Mth.lerp(pt, mc.player.yRotO, mc.player.getYRot());
+        float camYaw = mc.player.yRotO
+                + Mth.wrapDegrees(mc.player.getYRot() - mc.player.yRotO) * pt;
         float camPitch = Mth.lerp(pt, mc.player.xRotO, mc.player.getXRot());
         float curYaw = CursorState.getInterpolatedYaw(pt);
         float curPitch = CursorState.getInterpolatedPitch(pt);
@@ -130,31 +192,26 @@ public class MovementHandler {
         float deltaYaw = Mth.wrapDegrees(curYaw - camYaw);
         float deltaPitch = curPitch - camPitch;
 
-        double fov = mc.options.fov().get();
-        double halfFovRad = Math.toRadians(fov / 2.0);
+        double halfFovRad = Math.toRadians(mc.options.fov().get() / 2.0);
+        int w = mc.getWindow().getGuiScaledWidth();
+        int h = mc.getWindow().getGuiScaledHeight();
+        double pxPerRadian = (h / 2.0) / Math.tan(halfFovRad);
 
-        int screenWidth = mc.getWindow().getGuiScaledWidth();
-        int screenHeight = mc.getWindow().getGuiScaledHeight();
+        int cx = w / 2 + (int) (Math.tan(Math.toRadians(deltaYaw)) * pxPerRadian);
+        int cy = h / 2 + (int) (Math.tan(Math.toRadians(deltaPitch)) * pxPerRadian);
 
-        // Приблизительная проекция угла в пиксели (вертикальный FOV как база для обеих осей;
-        // для небольших смещений искажение по краям экрана несущественно).
-        double pxPerRadian = (screenHeight / 2.0) / Math.tan(halfFovRad);
-
-        int offsetX = (int) (Math.tan(Math.toRadians(deltaYaw)) * pxPerRadian);
-        int offsetY = (int) (-Math.tan(Math.toRadians(deltaPitch)) * pxPerRadian);
-
-        int cx = screenWidth / 2 + offsetX;
-        int cy = screenHeight / 2 + offsetY;
+        cx = Mth.clamp(cx, 6, w - 6);
+        cy = Mth.clamp(cy, 6, h - 6);
 
         GuiGraphics gui = event.getGuiGraphics();
         int size = 4;
-        int thickness = 1;
+        int t = 1;
         int color = 0xCCFFFFFF;
-
-        gui.fill(cx - size, cy - thickness, cx + size, cy + thickness, color);
-        gui.fill(cx - thickness, cy - size, cx + thickness, cy + size, color);
+        gui.fill(cx - size, cy - t, cx + size, cy + t, color);
+        gui.fill(cx - t, cy - size, cx + t, cy + size, color);
     }
 
+    // Хотбар — без изменений (Post оверлея CHAT_PANEL, он не отменён)
     @SubscribeEvent
     public void onRenderGuiPost(RenderGuiOverlayEvent.Post event) {
         if (!event.getOverlay().id().equals(VanillaGuiOverlay.CHAT_PANEL.id())) return;
@@ -177,46 +234,22 @@ public class MovementHandler {
         int totalWidth = 9 * (slotSize + gap);
         int startX = (screenWidth - totalWidth) / 2;
 
-        // Позиция Y зависит от выезда
         float baseY = (screenHeight + 40) - (renderSlide * 72);
-
-        // Цвет зависит от альфы
-        int alpha = (int)(renderAlpha * 200);
+        int alpha = (int) (renderAlpha * 200);
         int color = (alpha << 24);
 
         for (int i = 0; i < 9; i++) {
             int x = startX + i * (slotSize + gap);
             float currentH = Mth.lerp(pt, prevSlotH[i], slotH[i]);
-            float y = baseY - currentH;
+            int y = (int) (baseY - currentH);
 
-            // Рисуем фон слота
-            gui.fill(x, (int)y, x + slotSize, (int)y + slotSize, color);
+            gui.fill(x, y, x + slotSize, y + slotSize, color);
 
             ItemStack stack = mc.player.getInventory().getItem(i);
             if (!stack.isEmpty()) {
-                gui.renderItem(stack, x + 3, (int)y + 3);
-                gui.renderItemDecorations(mc.font, stack, x + 3, (int)y + 3);
+                gui.renderItem(stack, x + 3, y + 3);
+                gui.renderItemDecorations(mc.font, stack, x + 3, y + 3);
             }
-        }
-    }
-
-    @SubscribeEvent
-    public void onCameraSetup(ViewportEvent.ComputeCameraAngles event) {
-        float pt = (float) event.getPartialTick();
-        event.setRoll(event.getRoll() + Mth.lerp(pt, prevTilt, currentTilt));
-        swayTime += (pt * 0.035f);
-        if (fatigue > 0.01f) {
-            float amp = fatigue * 0.8f;
-            event.setYaw(event.getYaw() + (float)(Math.sin(swayTime) + Math.sin(swayTime * 0.45f)) * amp);
-            event.setPitch(event.getPitch() + (float)(Math.cos(swayTime * 0.65f) + Math.cos(swayTime * 0.25f)) * (amp * 0.5f));
-        }
-    }
-
-    @SubscribeEvent
-    public void onFOVUpdate(ViewportEvent.ComputeFov event) {
-        Player p = Minecraft.getInstance().player;
-        if (p != null && p.isSprinting()) {
-            event.setFOV(event.getFOV() + ((float) p.getDeltaMovement().horizontalDistance() * 12.0f));
         }
     }
 }

@@ -9,6 +9,14 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
+/**
+ * Рейкаст по БЛОКАМ: Entity#pick вызывает getViewVector — подменяем
+ * на отстающий прицел. Твой миксин был корректен, добавлен только
+ * счётчик для телеметрии (CursorState.redirectCalls).
+ *
+ * ВЕРСИЯ 2: этот миксин теперь НЕОБЯЗАТЕЛЕН — hitResult и так
+ * переписывается событиями. Он даёт покадровую точность между тиками.
+ */
 @Mixin(Entity.class)
 public class EntityPickMixin {
 
@@ -26,6 +34,7 @@ public class EntityPickMixin {
         if (self != Minecraft.getInstance().player) {
             return self.getViewVector(partialTick);
         }
+        CursorState.redirectCalls++;
         return CursorState.getInterpolatedDirection(partialTick);
     }
 }

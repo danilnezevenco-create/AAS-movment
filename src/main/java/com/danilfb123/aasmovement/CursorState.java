@@ -6,20 +6,17 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 /**
- * Хранит "виртуальное" направление прицела, которое с задержкой следует за
- * реальным направлением камеры игрока (реальными yaw/pitch).
+ * "Виртуальное" направление прицела, отстающее от камеры.
  *
- * Используется:
- *  - MovementHandler#onRenderCrosshair — чтобы нарисовать смещённое перекрестие;
- *  - MinecraftMixin — чтобы реальный рейкаст (наведение/ломание/взаимодействие/атака)
- *    шёл именно по этому, отстающему, направлению, а не по направлению реальной камеры.
+ * ВЕРСИЯ 2: добавлена телеметрия миксинов. Редиректы в миксинах
+ * инкрементируют redirectCalls; дебаг-строка раз в секунду печатает
+ * mixin=ALIVE / mixin=DEAD — сразу видно, внедрились миксины или нет.
+ * Механика при этом работает в любом случае: hitResult переписывается
+ * событиями в MovementHandler (overrideHitResult).
  */
 public class CursorState {
 
-    // Насколько быстро прицел "догоняет" камеру за тик.
-    // Меньше значение -> больше ощущаемая задержка.
-    // ВРЕМЕННО выставлено ОЧЕНЬ маленькое значение для теста — прицел
-    // будет догонять камеру секунды 2-3, эффект должен быть невозможно не заметить.
+    // 0.02f — ТЕСТОВОЕ значение (лаг 2-3 секунды). Для игры: 0.25f-0.5f.
     public static float catchUpSpeed = 0.02f;
 
     public static float cursorYaw = 0.0f;
@@ -27,28 +24,33 @@ public class CursorState {
     public static float prevCursorYaw = 0.0f;
     public static float prevCursorPitch = 0.0f;
 
+    // Счётчик вызовов редиректов из миксинов (см. EntityPickMixin и
+    // GameRendererPickMixin). Растёт -> миксины живы и дают
+    // покадровую точность рейкаста. Стоит на месте -> миксины не
+    // внедрились, работает событийный override (тоже ок).
+    public static long redirectCalls = 0;
+
     private static boolean initialized = false;
+    private static long lastLoggedRedirects = 0;
 
     private static final Logger LOGGER = LogManager.getLogger("AASMovement/CursorState");
     private static int debugTickCounter = 0;
 
-    /** Вызывать раз в тик из MovementHandler с реальными углами игрока. */
     public static void tick(float realYaw, float realPitch) {
         prevCursorYaw = cursorYaw;
         prevCursorPitch = cursorPitch;
 
-        // DEBUG: раз в секунду печатаем в лог, что метод вообще вызывается,
-        // и насколько сильно cursorYaw отстаёт от realYaw. Если этих строк
-        // нет в логе (latest.log) вообще — значит onClientTick/CursorState.tick
-        // не вызывается (проблема в регистрации ивента), а не в миксине.
         debugTickCounter++;
         if (debugTickCounter % 20 == 0) {
-            LOGGER.info("[AASMovement DEBUG] realYaw={}, cursorYaw={}, delta={}",
-                    realYaw, cursorYaw, Mth.wrapDegrees(realYaw - cursorYaw));
+            boolean alive = redirectCalls > lastLoggedRedirects;
+            lastLoggedRedirects = redirectCalls;
+            LOGGER.info("[AASMovement DEBUG] realYaw={}, cursorYaw={}, delta={}, mixin={}",
+                    realYaw, cursorYaw,
+                    Mth.wrapDegrees(realYaw - cursorYaw),
+                    alive ? "ALIVE (" + redirectCalls + ")" : "DEAD");
         }
 
         if (!initialized) {
-            // Первый тик после захода в мир/респавна — не даём прицелу "лететь" издалека.
             cursorYaw = realYaw;
             cursorPitch = realPitch;
             prevCursorYaw = realYaw;
@@ -57,36 +59,35 @@ public class CursorState {
             return;
         }
 
-        cursorYaw = lerpAngle(catchUpSpeed, cursorYaw, realYaw);
-        cursorPitch = Mth.lerp(catchUpSpeed, cursorPitch, realPitch);
+        cursorYaw += Mth.wrapDegrees(realYaw - cursorYaw) * catchUpSpeed;
+        cursorPitch = Mth.lerp(catchUpSpeed, cursorPitch,
+                Mth.clamp(realPitch, -90.0f, 90.0f));
     }
 
-    /** Сбросить состояние (например, при выходе из мира), чтобы не тянуть старые углы. */
     public static void reset() {
         initialized = false;
+        debugTickCounter = 0;
+        redirectCalls = 0;
+        lastLoggedRedirects = 0;
     }
 
-    private static float lerpAngle(float factor, float current, float target) {
-        float delta = Mth.wrapDegrees(target - current);
-        return current + delta * factor;
-    }
-
+    // Интерполяция по кратчайшей дуге (фикс кувырка на +/-180)
     public static float getInterpolatedYaw(float partialTick) {
-        return Mth.lerp(partialTick, prevCursorYaw, cursorYaw);
+        return prevCursorYaw
+                + Mth.wrapDegrees(cursorYaw - prevCursorYaw) * partialTick;
     }
 
     public static float getInterpolatedPitch(float partialTick) {
         return Mth.lerp(partialTick, prevCursorPitch, cursorPitch);
     }
 
-    /** Интерполированное между тиками направление взгляда "прицела" (для рейкаста). */
     public static Vec3 getInterpolatedDirection(float partialTick) {
-        float yaw = getInterpolatedYaw(partialTick);
-        float pitch = getInterpolatedPitch(partialTick);
-        return calculateViewVector(pitch, yaw);
+        return calculateViewVector(
+                getInterpolatedPitch(partialTick),
+                getInterpolatedYaw(partialTick));
     }
 
-    // Копия формулы Entity#calculateViewVector — переводит yaw/pitch в единичный вектор направления.
+    // Копия формулы Entity#calculateViewVector
     private static Vec3 calculateViewVector(float pitch, float yaw) {
         float f = pitch * ((float) Math.PI / 180F);
         float f1 = -yaw * ((float) Math.PI / 180F);

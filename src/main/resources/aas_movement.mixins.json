@@ -4,8 +4,10 @@
   "package": "com.danilfb123.aasmovement.mixin",
   "compatibilityLevel": "JAVA_17",
   "refmap": "aas_movement.refmap.json",
-  "mixins": [
-    "EntityPickMixin"
+  "mixins": [],
+  "client": [
+    "EntityPickMixin",
+    "GameRendererPickMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -24,6 +24,14 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
+/**
+ * Р РµР№РєР°СЃС‚ РїРѕ Р‘Р›РћРљРђРњ: Entity#pick РІС‹Р·С‹РІР°РµС‚ getViewVector вЂ” РїРѕРґРјРµРЅСЏРµРј
+ * РЅР° РѕС‚СЃС‚Р°СЋС‰РёР№ РїСЂРёС†РµР». РўРІРѕР№ РјРёРєСЃРёРЅ Р±С‹Р» РєРѕСЂСЂРµРєС‚РµРЅ, РґРѕР±Р°РІР»РµРЅ С‚РѕР»СЊРєРѕ
+ * СЃС‡С‘С‚С‡РёРє РґР»СЏ С‚РµР»РµРјРµС‚СЂРёРё (CursorState.redirectCalls).
+ *
+ * Р’Р•Р РЎРРЇ 2: СЌС‚РѕС‚ РјРёРєСЃРёРЅ С‚РµРїРµСЂСЊ РќР•РћР‘РЇР—РђРўР•Р›Р•Рќ вЂ” hitResult Рё С‚Р°Рє
+ * РїРµСЂРµРїРёСЃС‹РІР°РµС‚СЃСЏ СЃРѕР±С‹С‚РёСЏРјРё. РћРЅ РґР°С‘С‚ РїРѕРєР°РґСЂРѕРІСѓСЋ С‚РѕС‡РЅРѕСЃС‚СЊ РјРµР¶РґСѓ С‚РёРєР°РјРё.
+ */
 @Mixin(Entity.class)
 public class EntityPickMixin {
 
@@ -41,6 +49,46 @@ public class EntityPickMixin {
         if (self != Minecraft.getInstance().player) {
             return self.getViewVector(partialTick);
         }
+        CursorState.redirectCalls++;
+        return CursorState.getInterpolatedDirection(partialTick);
+    }
+}
+==========================================
+FILE: GameRendererPickMixin.java
+PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\java\com\danilfb123\aasmovement\mixin\GameRendererPickMixin.java
+==========================================
+package com.danilfb123.aasmovement.mixin;
+
+import com.danilfb123.aasmovement.CursorState;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.world.phys.Vec3;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Redirect;
+
+/**
+ * Р РµР№РєР°СЃС‚ РїРѕ РЎРЈР©РќРћРЎРўРЇРњ: GameRenderer#pick СЃС‚СЂРѕРёС‚ Р»СѓС‡ РїСЂСЏРјС‹Рј РІС‹Р·РѕРІРѕРј
+ * player.getViewVector(partialTick) вЂ” РїРѕРґРјРµРЅСЏРµРј РЅР° РѕС‚СЃС‚Р°СЋС‰РёР№ РїСЂРёС†РµР».
+ *
+ * Р’Р•Р РЎРРЇ 2: С‚РѕР¶Рµ РќР•РћР‘РЇР—РђРўР•Р›Р•Рќ вЂ” СЃРѕР±С‹С‚РёР№РЅС‹Р№ override РІ MovementHandler
+ * РїРµСЂРµСЃС‡РёС‚С‹РІР°РµС‚ Рё Р±Р»РѕРє, Рё СЃСѓС‰РЅРѕСЃС‚СЊ. РњРёРєСЃРёРЅ РґРѕР±Р°РІР»СЏРµС‚ РїРѕРєР°РґСЂРѕРІСѓСЋ С‚РѕС‡РЅРѕСЃС‚СЊ.
+ */
+@Mixin(GameRenderer.class)
+public class GameRendererPickMixin {
+
+    @Redirect(
+            method = "pick",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/player/LocalPlayer;getViewVector(F)Lnet/minecraft/world/phys/Vec3;"
+            )
+    )
+    private Vec3 aasmovement$redirectViewVector(LocalPlayer player, float partialTick) {
+        if (player.isCreative()) {
+            return player.getViewVector(partialTick);
+        }
+        CursorState.redirectCalls++;
         return CursorState.getInterpolatedDirection(partialTick);
     }
 }
@@ -71,20 +119,17 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 /**
- * РҐСЂР°РЅРёС‚ "РІРёСЂС‚СѓР°Р»СЊРЅРѕРµ" РЅР°РїСЂР°РІР»РµРЅРёРµ РїСЂРёС†РµР»Р°, РєРѕС‚РѕСЂРѕРµ СЃ Р·Р°РґРµСЂР¶РєРѕР№ СЃР»РµРґСѓРµС‚ Р·Р°
- * СЂРµР°Р»СЊРЅС‹Рј РЅР°РїСЂР°РІР»РµРЅРёРµРј РєР°РјРµСЂС‹ РёРіСЂРѕРєР° (СЂРµР°Р»СЊРЅС‹РјРё yaw/pitch).
+ * "Р’РёСЂС‚СѓР°Р»СЊРЅРѕРµ" РЅР°РїСЂР°РІР»РµРЅРёРµ РїСЂРёС†РµР»Р°, РѕС‚СЃС‚Р°СЋС‰РµРµ РѕС‚ РєР°РјРµСЂС‹.
  *
- * РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ:
- *  - MovementHandler#onRenderCrosshair вЂ” С‡С‚РѕР±С‹ РЅР°СЂРёСЃРѕРІР°С‚СЊ СЃРјРµС‰С‘РЅРЅРѕРµ РїРµСЂРµРєСЂРµСЃС‚РёРµ;
- *  - MinecraftMixin вЂ” С‡С‚РѕР±С‹ СЂРµР°Р»СЊРЅС‹Р№ СЂРµР№РєР°СЃС‚ (РЅР°РІРµРґРµРЅРёРµ/Р»РѕРјР°РЅРёРµ/РІР·Р°РёРјРѕРґРµР№СЃС‚РІРёРµ/Р°С‚Р°РєР°)
- *    С€С‘Р» РёРјРµРЅРЅРѕ РїРѕ СЌС‚РѕРјСѓ, РѕС‚СЃС‚Р°СЋС‰РµРјСѓ, РЅР°РїСЂР°РІР»РµРЅРёСЋ, Р° РЅРµ РїРѕ РЅР°РїСЂР°РІР»РµРЅРёСЋ СЂРµР°Р»СЊРЅРѕР№ РєР°РјРµСЂС‹.
+ * Р’Р•Р РЎРРЇ 2: РґРѕР±Р°РІР»РµРЅР° С‚РµР»РµРјРµС‚СЂРёСЏ РјРёРєСЃРёРЅРѕРІ. Р РµРґРёСЂРµРєС‚С‹ РІ РјРёРєСЃРёРЅР°С…
+ * РёРЅРєСЂРµРјРµРЅС‚РёСЂСѓСЋС‚ redirectCalls; РґРµР±Р°Рі-СЃС‚СЂРѕРєР° СЂР°Р· РІ СЃРµРєСѓРЅРґСѓ РїРµС‡Р°С‚Р°РµС‚
+ * mixin=ALIVE / mixin=DEAD вЂ” СЃСЂР°Р·Сѓ РІРёРґРЅРѕ, РІРЅРµРґСЂРёР»РёСЃСЊ РјРёРєСЃРёРЅС‹ РёР»Рё РЅРµС‚.
+ * РњРµС…Р°РЅРёРєР° РїСЂРё СЌС‚РѕРј СЂР°Р±РѕС‚Р°РµС‚ РІ Р»СЋР±РѕРј СЃР»СѓС‡Р°Рµ: hitResult РїРµСЂРµРїРёСЃС‹РІР°РµС‚СЃСЏ
+ * СЃРѕР±С‹С‚РёСЏРјРё РІ MovementHandler (overrideHitResult).
  */
 public class CursorState {
 
-    // РќР°СЃРєРѕР»СЊРєРѕ Р±С‹СЃС‚СЂРѕ РїСЂРёС†РµР» "РґРѕРіРѕРЅСЏРµС‚" РєР°РјРµСЂСѓ Р·Р° С‚РёРє.
-    // РњРµРЅСЊС€Рµ Р·РЅР°С‡РµРЅРёРµ -> Р±РѕР»СЊС€Рµ РѕС‰СѓС‰Р°РµРјР°СЏ Р·Р°РґРµСЂР¶РєР°.
-    // Р’Р Р•РњР•РќРќРћ РІС‹СЃС‚Р°РІР»РµРЅРѕ РћР§Р•РќР¬ РјР°Р»РµРЅСЊРєРѕРµ Р·РЅР°С‡РµРЅРёРµ РґР»СЏ С‚РµСЃС‚Р° вЂ” РїСЂРёС†РµР»
-    // Р±СѓРґРµС‚ РґРѕРіРѕРЅСЏС‚СЊ РєР°РјРµСЂСѓ СЃРµРєСѓРЅРґС‹ 2-3, СЌС„С„РµРєС‚ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РЅРµРІРѕР·РјРѕР¶РЅРѕ РЅРµ Р·Р°РјРµС‚РёС‚СЊ.
+    // 0.02f вЂ” РўР•РЎРўРћР’РћР• Р·РЅР°С‡РµРЅРёРµ (Р»Р°Рі 2-3 СЃРµРєСѓРЅРґС‹). Р”Р»СЏ РёРіСЂС‹: 0.25f-0.5f.
     public static float catchUpSpeed = 0.02f;
 
     public static float cursorYaw = 0.0f;
@@ -92,28 +137,33 @@ public class CursorState {
     public static float prevCursorYaw = 0.0f;
     public static float prevCursorPitch = 0.0f;
 
+    // РЎС‡С‘С‚С‡РёРє РІС‹Р·РѕРІРѕРІ СЂРµРґРёСЂРµРєС‚РѕРІ РёР· РјРёРєСЃРёРЅРѕРІ (СЃРј. EntityPickMixin Рё
+    // GameRendererPickMixin). Р Р°СЃС‚С‘С‚ -> РјРёРєСЃРёРЅС‹ Р¶РёРІС‹ Рё РґР°СЋС‚
+    // РїРѕРєР°РґСЂРѕРІСѓСЋ С‚РѕС‡РЅРѕСЃС‚СЊ СЂРµР№РєР°СЃС‚Р°. РЎС‚РѕРёС‚ РЅР° РјРµСЃС‚Рµ -> РјРёРєСЃРёРЅС‹ РЅРµ
+    // РІРЅРµРґСЂРёР»РёСЃСЊ, СЂР°Р±РѕС‚Р°РµС‚ СЃРѕР±С‹С‚РёР№РЅС‹Р№ override (С‚РѕР¶Рµ РѕРє).
+    public static long redirectCalls = 0;
+
     private static boolean initialized = false;
+    private static long lastLoggedRedirects = 0;
 
     private static final Logger LOGGER = LogManager.getLogger("AASMovement/CursorState");
     private static int debugTickCounter = 0;
 
-    /** Р’С‹Р·С‹РІР°С‚СЊ СЂР°Р· РІ С‚РёРє РёР· MovementHandler СЃ СЂРµР°Р»СЊРЅС‹РјРё СѓРіР»Р°РјРё РёРіСЂРѕРєР°. */
     public static void tick(float realYaw, float realPitch) {
         prevCursorYaw = cursorYaw;
         prevCursorPitch = cursorPitch;
 
-        // DEBUG: СЂР°Р· РІ СЃРµРєСѓРЅРґСѓ РїРµС‡Р°С‚Р°РµРј РІ Р»РѕРі, С‡С‚Рѕ РјРµС‚РѕРґ РІРѕРѕР±С‰Рµ РІС‹Р·С‹РІР°РµС‚СЃСЏ,
-        // Рё РЅР°СЃРєРѕР»СЊРєРѕ СЃРёР»СЊРЅРѕ cursorYaw РѕС‚СЃС‚Р°С‘С‚ РѕС‚ realYaw. Р•СЃР»Рё СЌС‚РёС… СЃС‚СЂРѕРє
-        // РЅРµС‚ РІ Р»РѕРіРµ (latest.log) РІРѕРѕР±С‰Рµ вЂ” Р·РЅР°С‡РёС‚ onClientTick/CursorState.tick
-        // РЅРµ РІС‹Р·С‹РІР°РµС‚СЃСЏ (РїСЂРѕР±Р»РµРјР° РІ СЂРµРіРёСЃС‚СЂР°С†РёРё РёРІРµРЅС‚Р°), Р° РЅРµ РІ РјРёРєСЃРёРЅРµ.
         debugTickCounter++;
         if (debugTickCounter % 20 == 0) {
-            LOGGER.info("[AASMovement DEBUG] realYaw={}, cursorYaw={}, delta={}",
-                    realYaw, cursorYaw, Mth.wrapDegrees(realYaw - cursorYaw));
+            boolean alive = redirectCalls > lastLoggedRedirects;
+            lastLoggedRedirects = redirectCalls;
+            LOGGER.info("[AASMovement DEBUG] realYaw={}, cursorYaw={}, delta={}, mixin={}",
+                    realYaw, cursorYaw,
+                    Mth.wrapDegrees(realYaw - cursorYaw),
+                    alive ? "ALIVE (" + redirectCalls + ")" : "DEAD");
         }
 
         if (!initialized) {
-            // РџРµСЂРІС‹Р№ С‚РёРє РїРѕСЃР»Рµ Р·Р°С…РѕРґР° РІ РјРёСЂ/СЂРµСЃРїР°РІРЅР° вЂ” РЅРµ РґР°С‘Рј РїСЂРёС†РµР»Сѓ "Р»РµС‚РµС‚СЊ" РёР·РґР°Р»РµРєР°.
             cursorYaw = realYaw;
             cursorPitch = realPitch;
             prevCursorYaw = realYaw;
@@ -122,36 +172,35 @@ public class CursorState {
             return;
         }
 
-        cursorYaw = lerpAngle(catchUpSpeed, cursorYaw, realYaw);
-        cursorPitch = Mth.lerp(catchUpSpeed, cursorPitch, realPitch);
+        cursorYaw += Mth.wrapDegrees(realYaw - cursorYaw) * catchUpSpeed;
+        cursorPitch = Mth.lerp(catchUpSpeed, cursorPitch,
+                Mth.clamp(realPitch, -90.0f, 90.0f));
     }
 
-    /** РЎР±СЂРѕСЃРёС‚СЊ СЃРѕСЃС‚РѕСЏРЅРёРµ (РЅР°РїСЂРёРјРµСЂ, РїСЂРё РІС‹С…РѕРґРµ РёР· РјРёСЂР°), С‡С‚РѕР±С‹ РЅРµ С‚СЏРЅСѓС‚СЊ СЃС‚Р°СЂС‹Рµ СѓРіР»С‹. */
     public static void reset() {
         initialized = false;
+        debugTickCounter = 0;
+        redirectCalls = 0;
+        lastLoggedRedirects = 0;
     }
 
-    private static float lerpAngle(float factor, float current, float target) {
-        float delta = Mth.wrapDegrees(target - current);
-        return current + delta * factor;
-    }
-
+    // РРЅС‚РµСЂРїРѕР»СЏС†РёСЏ РїРѕ РєСЂР°С‚С‡Р°Р№С€РµР№ РґСѓРіРµ (С„РёРєСЃ РєСѓРІС‹СЂРєР° РЅР° +/-180)
     public static float getInterpolatedYaw(float partialTick) {
-        return Mth.lerp(partialTick, prevCursorYaw, cursorYaw);
+        return prevCursorYaw
+                + Mth.wrapDegrees(cursorYaw - prevCursorYaw) * partialTick;
     }
 
     public static float getInterpolatedPitch(float partialTick) {
         return Mth.lerp(partialTick, prevCursorPitch, cursorPitch);
     }
 
-    /** РРЅС‚РµСЂРїРѕР»РёСЂРѕРІР°РЅРЅРѕРµ РјРµР¶РґСѓ С‚РёРєР°РјРё РЅР°РїСЂР°РІР»РµРЅРёРµ РІР·РіР»СЏРґР° "РїСЂРёС†РµР»Р°" (РґР»СЏ СЂРµР№РєР°СЃС‚Р°). */
     public static Vec3 getInterpolatedDirection(float partialTick) {
-        float yaw = getInterpolatedYaw(partialTick);
-        float pitch = getInterpolatedPitch(partialTick);
-        return calculateViewVector(pitch, yaw);
+        return calculateViewVector(
+                getInterpolatedPitch(partialTick),
+                getInterpolatedYaw(partialTick));
     }
 
-    // РљРѕРїРёСЏ С„РѕСЂРјСѓР»С‹ Entity#calculateViewVector вЂ” РїРµСЂРµРІРѕРґРёС‚ yaw/pitch РІ РµРґРёРЅРёС‡РЅС‹Р№ РІРµРєС‚РѕСЂ РЅР°РїСЂР°РІР»РµРЅРёСЏ.
+    // РљРѕРїРёСЏ С„РѕСЂРјСѓР»С‹ Entity#calculateViewVector
     private static Vec3 calculateViewVector(float pitch, float yaw) {
         float f = pitch * ((float) Math.PI / 180F);
         float f1 = -yaw * ((float) Math.PI / 180F);
@@ -172,15 +221,22 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
+import net.minecraftforge.client.event.RenderGuiEvent;
 import net.minecraftforge.client.event.RenderGuiOverlayEvent;
-import net.minecraftforge.client.event.ViewportEvent;
 import net.minecraftforge.client.gui.overlay.VanillaGuiOverlay;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 public class MovementHandler {
-    // --- Р¤РР—РРљРђ ---
+    // --- Р¤РР—РРљРђ (Р±РµР· РёР·РјРµРЅРµРЅРёР№) ---
     private float fatigue = 0.0f;
     private float currentTilt = 0.0f;
     private float prevTilt = 0.0f;
@@ -188,14 +244,11 @@ public class MovementHandler {
     private float swayTime = 0.0f;
     private boolean wasInAir = false;
 
-    // --- РРќРўР•Р Р¤Р•Р™РЎ ---
+    // --- РРќРўР•Р Р¤Р•Р™РЎ (Р±РµР· РёР·РјРµРЅРµРЅРёР№) ---
     private int hotbarTimer = 0;
     private int lastSelectedSlot = -1;
-
-    // Р Р°Р·РґРµР»СЏРµРј Р°РЅРёРјР°С†РёСЋ РїРѕСЏРІР»РµРЅРёСЏ: РѕС‚РґРµР»СЊРЅРѕ Р°Р»СЊС„Р° (РїСЂРѕР·СЂР°С‡РЅРѕСЃС‚СЊ) Рё РїРѕР·РёС†РёСЏ (РІС‹РµР·Рґ)
     private float hotbarAlpha = 0.0f, prevHotbarAlpha = 0.0f;
     private float hotbarSlide = 0.0f, prevHotbarSlide = 0.0f;
-
     private float[] slotH = new float[9], prevSlotH = new float[9];
 
     @SubscribeEvent
@@ -206,7 +259,7 @@ public class MovementHandler {
         Player player = mc.player;
         if (player == null) return;
 
-        // --- Р”Р’РР–Р•РќРР• ---
+        // --- Р”Р’РР–Р•РќРР• (Р±РµР· РёР·РјРµРЅРµРЅРёР№) ---
         prevTilt = currentTilt;
         currentTilt = Mth.lerp(0.12f, currentTilt, -player.xxa * 1.33f);
         if (player.onGround()) {
@@ -218,15 +271,22 @@ public class MovementHandler {
             player.setDeltaMovement(player.getDeltaMovement().multiply(slow, 1.0, slow));
             landingStun *= 0.88f;
         }
-        fatigue = (player.isSprinting() && player.zza != 0) ? Math.min(fatigue + 0.012f, 1.0f) : Math.max(fatigue - 0.008f, 0.0f);
+        fatigue = (player.isSprinting() && player.zza != 0)
+                ? Math.min(fatigue + 0.012f, 1.0f)
+                : Math.max(fatigue - 0.008f, 0.0f);
 
         // --- РћРўРЎРўРђР®Р©Р•Р• РќРђРџР РђР’Р›Р•РќРР• РџР РР¦Р•Р›Рђ ---
-        // Р РµР°Р»СЊРЅС‹Рµ С‚РµРєСѓС‰РёРµ СѓРіР»С‹ РєР°РјРµСЂС‹ РёРіСЂРѕРєР°. cursorYaw/cursorPitch РІ CursorState
-        // Р±СѓРґСѓС‚ "РґРѕРіРѕРЅСЏС‚СЊ" РёС… СЃ Р·Р°РґРµСЂР¶РєРѕР№, Рё РёРјРµРЅРЅРѕ РѕРЅРё СЂРµР°Р»СЊРЅРѕ РёСЃРїРѕР»СЊР·СѓСЋС‚СЃСЏ
-        // РїСЂРё СЂРµР№РєР°СЃС‚Рµ (СЃРј. MinecraftMixin).
         CursorState.tick(player.getYRot(), player.getXRot());
 
-        // --- Р›РћР“РРљРђ РРќРўР•Р Р¤Р•Р™РЎРђ ---
+        // Р“Р›РђР’РќР«Р™ Р¤РРљРЎ, РЎР›РћР™ 1: РІР°РЅРёР»СЊ СѓР¶Рµ РїРѕСЃС‡РёС‚Р°Р»Р° hitResult РћРў РљРђРњР•Р Р«
+        // (GameRenderer#tick -> pick(1.0F) РїСЂРѕС€С‘Р» СЂР°РЅСЊС€Рµ РІ СЌС‚РѕРј Р¶Рµ С‚РёРєРµ).
+        // РџРµСЂРµСЃС‡РёС‚С‹РІР°РµРј РµРіРѕ РћРў РџР РР¦Р•Р›Рђ. РљР»РёРєРё (handleKeybinds) Рё outline
+        // С‡РёС‚Р°СЋС‚ РёРјРµРЅРЅРѕ СЌС‚Рѕ РїРѕР»Рµ.
+        if (!player.isCreative() && mc.level != null && mc.gameMode != null) {
+            overrideHitResult(mc, player, 1.0F);
+        }
+
+        // --- Р›РћР“РРљРђ РРќРўР•Р Р¤Р•Р™РЎРђ (Р±РµР· РёР·РјРµРЅРµРЅРёР№) ---
         int currentSlot = player.getInventory().selected;
         if (currentSlot != lastSelectedSlot) {
             hotbarTimer = 50;
@@ -237,25 +297,80 @@ public class MovementHandler {
         prevHotbarAlpha = hotbarAlpha;
         prevHotbarSlide = hotbarSlide;
 
-        // 1) Р’ РєСЂРµР°С‚РёРІРµ С…РѕС‚Р±Р°СЂ РІРёРґРЅРѕ РІСЃРµРіРґР°
         boolean shouldShow = (hotbarTimer > 0 || player.isCreative());
-
         if (shouldShow) {
-            // 2) РЎСЂР°Р·Сѓ РЅР° РЅСѓР¶РЅРѕРј РјРµСЃС‚Рµ, РЅРѕ Р±С‹СЃС‚СЂРѕ РІС‹С…РѕРґРёС‚ РёР· Р°Р»СЊС„С‹ (0.35f РґР»СЏ СЃРєРѕСЂРѕСЃС‚Рё)
             hotbarSlide = 1.0f;
             hotbarAlpha = Mth.lerp(0.35f, hotbarAlpha, 1.0f);
         } else {
-            // РЈС…РѕРґРёС‚ РїР»Р°РІРЅРѕ РІРЅРёР· (РєР°Рє Р±С‹Р»Рѕ)
             hotbarSlide = Mth.lerp(0.12f, hotbarSlide, 0.0f);
             hotbarAlpha = Mth.lerp(0.12f, hotbarAlpha, 0.0f);
         }
 
-        // РђРЅРёРјР°С†РёСЏ РїСЂС‹Р¶РєР° РІС‹Р±СЂР°РЅРЅРѕРіРѕ СЃР»РѕС‚Р° РѕСЃС‚Р°Р»Р°СЃСЊ Р±РµР· РёР·РјРµРЅРµРЅРёР№
         for (int i = 0; i < 9; i++) {
             prevSlotH[i] = slotH[i];
             float targetH = (i == currentSlot) ? 10.0f : 0.0f;
             slotH[i] = Mth.lerp(0.4f, slotH[i], targetH);
         }
+    }
+
+    // Р“Р›РђР’РќР«Р™ Р¤РРљРЎ, РЎР›РћР™ 2: RenderTickEvent.Pre С„Р°Р№СЂРёС‚СЃСЏ РџРћРЎР›Р•
+    // gameRenderer.tick()/pick(), РЅРѕ Р”Рћ СЂРµРЅРґРµСЂР° РєР°РґСЂР° (СЌС‚Рѕ РІРёРґРЅРѕ РїСЂСЏРјРѕ РІ
+    // Forge-РїР°С‚С‡Рµ Minecraft#runTick). РџРµСЂРµР·Р°РїРёСЃС‹РІР°РµРј hitResult РµС‰С‘ СЂР°Р·,
+    // СѓР¶Рµ СЃ РєР°РґСЂРѕРІС‹Рј partialTick вЂ” РїРѕРґСЃРІРµС‚РєР° Р±Р»РѕРєР° Рё РЅР°РІРµРґРµРЅРёРµ РЅР° РјРѕР±Р°
+    // СЃР»РµРґСѓСЋС‚ РїСЂРёС†РµР»Сѓ РґР°Р¶Рµ РµСЃР»Рё РјРёРєСЃРёРЅС‹ РЅРµ РїСЂРёРјРµРЅРёР»РёСЃСЊ.
+    @SubscribeEvent
+    public void onRenderTickPre(TickEvent.RenderTickEvent event) {
+        if (event.phase != TickEvent.Phase.START) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.player.isCreative()) return;
+        if (mc.level == null || mc.gameMode == null) return;
+
+        overrideHitResult(mc, mc.player, event.renderTickTime);
+    }
+
+    /**
+     * РџРѕР»РЅС‹Р№ РїРµСЂРµСЃС‡С‘С‚ РЅР°РІРµРґРµРЅРёСЏ РїРѕ РЅР°РїСЂР°РІР»РµРЅРёСЋ РѕС‚СЃС‚Р°СЋС‰РµРіРѕ РїСЂРёС†РµР»Р°.
+     * Р РµРїР»РёРєР° РІР°РЅРёР»СЊРЅРѕРіРѕ GameRenderer#pick: СЃРЅР°С‡Р°Р»Р° РєР»РёРї РїРѕ Р±Р»РѕРєР°Рј,
+     * Р·Р°С‚РµРј Р»СѓС‡ РїРѕ СЃСѓС‰РЅРѕСЃС‚СЏРј, РѕРіСЂР°РЅРёС‡РµРЅРЅС‹Р№ РґРёСЃС‚Р°РЅС†РёРµР№ РґРѕ Р±Р»РѕРєР°.
+     */
+    private void overrideHitResult(Minecraft mc, Player player, float pt) {
+        double reach = mc.gameMode.getPickRange();
+
+        Vec3 eye = player.getEyePosition(pt);
+        Vec3 dir = CursorState.getInterpolatedDirection(pt);
+        Vec3 end = eye.add(dir.x * reach, dir.y * reach, dir.z * reach);
+
+        // 1) Р±Р»РѕРєРё (СЂРµРїР»РёРєР° Entity#pick)
+        BlockHitResult blockHit = player.level().clip(new ClipContext(
+                eye, end,
+                ClipContext.Block.OUTLINE,
+                ClipContext.Fluid.NONE,
+                player));
+
+        // 2) СЃСѓС‰РЅРѕСЃС‚Рё РЅРµ РґР°Р»СЊС€Рµ, С‡РµРј РЅР°Р№РґРµРЅРЅС‹Р№ Р±Р»РѕРє (СЂРµРїР»РёРєР° GameRenderer#pick)
+        double maxSqr = blockHit.getLocation().distanceToSqr(eye);
+        AABB box = player.getBoundingBox()
+                .expandTowards(dir.scale(reach))
+                .inflate(1.0, 1.0, 1.0);
+        EntityHitResult entityHit = ProjectileUtil.getEntityHitResult(
+                player, eye, end, box,
+                e -> !e.isSpectator() && e.isPickable(),
+                maxSqr);
+
+        if (entityHit != null) {
+            mc.hitResult = entityHit;
+            mc.crosshairPickEntity = entityHit.getEntity();
+        } else {
+            mc.hitResult = blockHit;
+            mc.crosshairPickEntity = null;
+        }
+    }
+
+    // РЎР±СЂРѕСЃ РїСЂРёС†РµР»Р° РїСЂРё РІС‹С…РѕРґРµ РёР· РјРёСЂР°
+    @SubscribeEvent
+    public void onLogout(ClientPlayerNetworkEvent.LoggingOut event) {
+        CursorState.reset();
     }
 
     @SubscribeEvent
@@ -269,28 +384,24 @@ public class MovementHandler {
             event.setCanceled(true);
         }
         Minecraft mc = Minecraft.getInstance();
-        if (id.equals(VanillaGuiOverlay.CROSSHAIR.id()) && mc.player != null && !mc.player.isCreative()) {
+        if (id.equals(VanillaGuiOverlay.CROSSHAIR.id())
+                && mc.player != null && !mc.player.isCreative()) {
             event.setCanceled(true);
         }
     }
 
-    /**
-     * Р РёСЃСѓРµРј СЃРѕР±СЃС‚РІРµРЅРЅРѕРµ РїРµСЂРµРєСЂРµСЃС‚РёРµ СЃРѕ СЃРјРµС‰РµРЅРёРµРј, РѕС‚СЂР°Р¶Р°СЋС‰РёРј СЂР°Р·РЅРёС†Сѓ РјРµР¶РґСѓ
-     * СЂРµР°Р»СЊРЅС‹Рј РЅР°РїСЂР°РІР»РµРЅРёРµРј РєР°РјРµСЂС‹ Рё "РѕС‚СЃС‚Р°СЋС‰РёРј" РЅР°РїСЂР°РІР»РµРЅРёРµРј РїСЂРёС†РµР»Р° (CursorState).
-     * Р’Р°РЅРёР»СЊРЅРѕРµ РїРµСЂРµРєСЂРµСЃС‚РёРµ РґР»СЏ survival РѕС‚РјРµРЅРµРЅРѕ РІ onRenderGuiPre, РїРѕСЌС‚РѕРјСѓ
-     * СЂРёСЃСѓРµРј РїРѕРІРµСЂС… РµРіРѕ РјРµСЃС‚Р° РІ Post-СЃРѕР±С‹С‚РёРё С‚РѕРіРѕ Р¶Рµ РѕРІРµСЂР»РµСЏ.
-     */
+    // РљСЂРµСЃС‚РёРє СЂРёСЃСѓРµРј РІ RenderGuiEvent.Post вЂ” Post РѕС‚РјРµРЅС‘РЅРЅРѕРіРѕ РѕРІРµСЂР»РµСЏ
+    // CROSSHAIR РЅРµ РІС‹Р·С‹РІР°РµС‚СЃСЏ РЅРёРєРѕРіРґР° (СЌС‚Рѕ СѓР¶Рµ РїРѕС‡РёРЅРµРЅРѕ, РєСЂРµСЃС‚РёРє РІРёРґРµРЅ).
     @SubscribeEvent
-    public void onRenderCrosshair(RenderGuiOverlayEvent.Post event) {
-        if (!event.getOverlay().id().equals(VanillaGuiOverlay.CROSSHAIR.id())) return;
-
+    public void onRenderCrosshair(RenderGuiEvent.Post event) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
-        if (mc.player.isCreative()) return; // РІ РєСЂРµР°С‚РёРІРµ РІР°РЅРёР»СЊРЅС‹Р№ РєСЂРµСЃС‚РёРє РЅРµ РѕС‚РјРµРЅСЏР»СЃСЏ вЂ” РЅРµ РґСѓР±Р»РёСЂСѓРµРј
+        if (mc.player.isCreative()) return;
 
         float pt = event.getPartialTick();
 
-        float camYaw = Mth.lerp(pt, mc.player.yRotO, mc.player.getYRot());
+        float camYaw = mc.player.yRotO
+                + Mth.wrapDegrees(mc.player.getYRot() - mc.player.yRotO) * pt;
         float camPitch = Mth.lerp(pt, mc.player.xRotO, mc.player.getXRot());
         float curYaw = CursorState.getInterpolatedYaw(pt);
         float curPitch = CursorState.getInterpolatedPitch(pt);
@@ -298,31 +409,26 @@ public class MovementHandler {
         float deltaYaw = Mth.wrapDegrees(curYaw - camYaw);
         float deltaPitch = curPitch - camPitch;
 
-        double fov = mc.options.fov().get();
-        double halfFovRad = Math.toRadians(fov / 2.0);
+        double halfFovRad = Math.toRadians(mc.options.fov().get() / 2.0);
+        int w = mc.getWindow().getGuiScaledWidth();
+        int h = mc.getWindow().getGuiScaledHeight();
+        double pxPerRadian = (h / 2.0) / Math.tan(halfFovRad);
 
-        int screenWidth = mc.getWindow().getGuiScaledWidth();
-        int screenHeight = mc.getWindow().getGuiScaledHeight();
+        int cx = w / 2 + (int) (Math.tan(Math.toRadians(deltaYaw)) * pxPerRadian);
+        int cy = h / 2 + (int) (Math.tan(Math.toRadians(deltaPitch)) * pxPerRadian);
 
-        // РџСЂРёР±Р»РёР·РёС‚РµР»СЊРЅР°СЏ РїСЂРѕРµРєС†РёСЏ СѓРіР»Р° РІ РїРёРєСЃРµР»Рё (РІРµСЂС‚РёРєР°Р»СЊРЅС‹Р№ FOV РєР°Рє Р±Р°Р·Р° РґР»СЏ РѕР±РµРёС… РѕСЃРµР№;
-        // РґР»СЏ РЅРµР±РѕР»СЊС€РёС… СЃРјРµС‰РµРЅРёР№ РёСЃРєР°Р¶РµРЅРёРµ РїРѕ РєСЂР°СЏРј СЌРєСЂР°РЅР° РЅРµСЃСѓС‰РµСЃС‚РІРµРЅРЅРѕ).
-        double pxPerRadian = (screenHeight / 2.0) / Math.tan(halfFovRad);
-
-        int offsetX = (int) (Math.tan(Math.toRadians(deltaYaw)) * pxPerRadian);
-        int offsetY = (int) (-Math.tan(Math.toRadians(deltaPitch)) * pxPerRadian);
-
-        int cx = screenWidth / 2 + offsetX;
-        int cy = screenHeight / 2 + offsetY;
+        cx = Mth.clamp(cx, 6, w - 6);
+        cy = Mth.clamp(cy, 6, h - 6);
 
         GuiGraphics gui = event.getGuiGraphics();
         int size = 4;
-        int thickness = 1;
+        int t = 1;
         int color = 0xCCFFFFFF;
-
-        gui.fill(cx - size, cy - thickness, cx + size, cy + thickness, color);
-        gui.fill(cx - thickness, cy - size, cx + thickness, cy + size, color);
+        gui.fill(cx - size, cy - t, cx + size, cy + t, color);
+        gui.fill(cx - t, cy - size, cx + t, cy + size, color);
     }
 
+    // РҐРѕС‚Р±Р°СЂ вЂ” Р±РµР· РёР·РјРµРЅРµРЅРёР№ (Post РѕРІРµСЂР»РµСЏ CHAT_PANEL, РѕРЅ РЅРµ РѕС‚РјРµРЅС‘РЅ)
     @SubscribeEvent
     public void onRenderGuiPost(RenderGuiOverlayEvent.Post event) {
         if (!event.getOverlay().id().equals(VanillaGuiOverlay.CHAT_PANEL.id())) return;
@@ -345,46 +451,22 @@ public class MovementHandler {
         int totalWidth = 9 * (slotSize + gap);
         int startX = (screenWidth - totalWidth) / 2;
 
-        // РџРѕР·РёС†РёСЏ Y Р·Р°РІРёСЃРёС‚ РѕС‚ РІС‹РµР·РґР°
         float baseY = (screenHeight + 40) - (renderSlide * 72);
-
-        // Р¦РІРµС‚ Р·Р°РІРёСЃРёС‚ РѕС‚ Р°Р»СЊС„С‹
-        int alpha = (int)(renderAlpha * 200);
+        int alpha = (int) (renderAlpha * 200);
         int color = (alpha << 24);
 
         for (int i = 0; i < 9; i++) {
             int x = startX + i * (slotSize + gap);
             float currentH = Mth.lerp(pt, prevSlotH[i], slotH[i]);
-            float y = baseY - currentH;
+            int y = (int) (baseY - currentH);
 
-            // Р РёСЃСѓРµРј С„РѕРЅ СЃР»РѕС‚Р°
-            gui.fill(x, (int)y, x + slotSize, (int)y + slotSize, color);
+            gui.fill(x, y, x + slotSize, y + slotSize, color);
 
             ItemStack stack = mc.player.getInventory().getItem(i);
             if (!stack.isEmpty()) {
-                gui.renderItem(stack, x + 3, (int)y + 3);
-                gui.renderItemDecorations(mc.font, stack, x + 3, (int)y + 3);
+                gui.renderItem(stack, x + 3, y + 3);
+                gui.renderItemDecorations(mc.font, stack, x + 3, y + 3);
             }
-        }
-    }
-
-    @SubscribeEvent
-    public void onCameraSetup(ViewportEvent.ComputeCameraAngles event) {
-        float pt = (float) event.getPartialTick();
-        event.setRoll(event.getRoll() + Mth.lerp(pt, prevTilt, currentTilt));
-        swayTime += (pt * 0.035f);
-        if (fatigue > 0.01f) {
-            float amp = fatigue * 0.8f;
-            event.setYaw(event.getYaw() + (float)(Math.sin(swayTime) + Math.sin(swayTime * 0.45f)) * amp);
-            event.setPitch(event.getPitch() + (float)(Math.cos(swayTime * 0.65f) + Math.cos(swayTime * 0.25f)) * (amp * 0.5f));
-        }
-    }
-
-    @SubscribeEvent
-    public void onFOVUpdate(ViewportEvent.ComputeFov event) {
-        Player p = Minecraft.getInstance().player;
-        if (p != null && p.isSprinting()) {
-            event.setFOV(event.getFOV() + ((float) p.getDeltaMovement().horizontalDistance() * 12.0f));
         }
     }
 }
@@ -414,8 +496,10 @@ PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\resources\aas_movement.mix
   "package": "com.danilfb123.aasmovement.mixin",
   "compatibilityLevel": "JAVA_17",
   "refmap": "aas_movement.refmap.json",
-  "mixins": [
-    "EntityPickMixin"
+  "mixins": [],
+  "client": [
+    "EntityPickMixin",
+    "GameRendererPickMixin"
   ],
   "injectors": {
     "defaultRequire": 1
