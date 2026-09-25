@@ -7,8 +7,10 @@
   "mixins": [],
   "client": [
     "EntityPickMixin",
-    "GameRendererPickMixin"
-  ],
+    "GameRendererPickMixin",
+    "ItemInHandRendererMixin",
+    "ProjectileShootMixin"
+  ]
   "injectors": {
     "defaultRequire": 1
   }

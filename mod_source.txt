@@ -57,39 +57,98 @@ public class EntityPickMixin {
 FILE: GameRendererPickMixin.java
 PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\java\com\danilfb123\aasmovement\mixin\GameRendererPickMixin.java
 ==========================================
-package com.danilfb123.aasmovement.mixin;
+package yourmod.mixin.client;
 
-import com.danilfb123.aasmovement.CursorState;
+import net.minecraft.client.Camera;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import yourmod.client.CursorState;
 
 /**
- * Р РµР№РєР°СЃС‚ РїРѕ РЎРЈР©РќРћРЎРўРЇРњ: GameRenderer#pick СЃС‚СЂРѕРёС‚ Р»СѓС‡ РїСЂСЏРјС‹Рј РІС‹Р·РѕРІРѕРј
- * player.getViewVector(partialTick) вЂ” РїРѕРґРјРµРЅСЏРµРј РЅР° РѕС‚СЃС‚Р°СЋС‰РёР№ РїСЂРёС†РµР».
+ * Р“Р°СЂР°РЅС‚РёСЂРѕРІР°РЅРЅРѕ РїРѕСЃР»РµРґРЅРёР№ РїРµСЂРµСЃС‡С‘С‚ mc.hitResult РІ РєР°Р¶РґРѕРј РєР°РґСЂРµ, РіРґРµ РІР°РЅРёР»СЊ
+ * РµРіРѕ СЃС‡РёС‚Р°РµС‚. РРЅР¶РµРєС‚ РІ TAIL, Р° РЅРµ РІ forge-СЌРІРµРЅС‚ РґРѕ render() вЂ” С‚Р°Рє СѓР±РёСЂР°РµРј
+ * СЃР°РјСѓ РіРѕРЅРєСѓ СЃРѕР±С‹С‚РёР№, Р° РЅРµ РїРѕРґСЃС‚СЂР°РёРІР°РµРјСЃСЏ РїРѕРґ РЅРµС‘.
  *
- * Р’Р•Р РЎРРЇ 2: С‚РѕР¶Рµ РќР•РћР‘РЇР—РђРўР•Р›Р•Рќ вЂ” СЃРѕР±С‹С‚РёР№РЅС‹Р№ override РІ MovementHandler
- * РїРµСЂРµСЃС‡РёС‚С‹РІР°РµС‚ Рё Р±Р»РѕРє, Рё СЃСѓС‰РЅРѕСЃС‚СЊ. РњРёРєСЃРёРЅ РґРѕР±Р°РІР»СЏРµС‚ РїРѕРєР°РґСЂРѕРІСѓСЋ С‚РѕС‡РЅРѕСЃС‚СЊ.
+ * РўРѕР»СЊРєРѕ survival/adventure вЂ” РІ РєСЂРµР°С‚РёРІРµ РІРµРґС‘Рј СЃРµР±СЏ РєР°Рє РІР°РЅРёР»СЊ.
  */
 @Mixin(GameRenderer.class)
-public class GameRendererPickMixin {
+public abstract class GameRendererPickMixin {
 
-    @Redirect(
-            method = "pick",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/player/LocalPlayer;getViewVector(F)Lnet/minecraft/world/phys/Vec3;"
-            )
-    )
-    private Vec3 aasmovement$redirectViewVector(LocalPlayer player, float partialTick) {
-        if (player.isCreative()) {
-            return player.getViewVector(partialTick);
+    // Р”Р°Р»СЊРЅРѕСЃС‚СЊ РїРёРєРёРЅРіР° вЂ” РєР°Рє Сѓ РІР°РЅРёР»Рё (adventure/survival РєРѕРїРёСЏ С‚РѕРіРѕ,
+    // С‡С‚Рѕ Р±РµСЂС‘С‚ СЃР°РјР° pick(); РїСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё СЃРёРЅС…СЂРѕРЅРёР·РёСЂСѓР№ СЃ СЂРµР°Р»СЊРЅС‹Рј
+    // Р·РЅР°С‡РµРЅРёРµРј РёР· С‚РІРѕРµРіРѕ EntityPickMixin/Р°С‚СЂРёР±СѓС‚РѕРІ РёРіСЂРѕРєР°).
+    private static final double PICK_RANGE = 20.0D;
+
+    @Inject(method = "pick", at = @At("TAIL"))
+    private void yourmod$overrideHitResultWithCursor(float partialTick, CallbackInfo ci) {
+        Minecraft mc = Minecraft.getInstance();
+        LocalPlayer player = mc.player;
+        Level level = mc.level;
+
+        if (player == null || level == null) {
+            return;
         }
-        CursorState.redirectCalls++;
-        return CursorState.getInterpolatedDirection(partialTick);
+
+        // РљСЂРµР°С‚РёРІ РЅРµ С‚СЂРѕРіР°РµРј РІРѕРѕР±С‰Рµ вЂ” РІР°РЅРёР»СЊ РєР°Рє РµСЃС‚СЊ.
+        if (player.isCreative()) {
+            return;
+        }
+
+        // pick() РјРѕР¶РµС‚ РґС‘СЂРіР°С‚СЊСЃСЏ РЅРµ С‚РѕР»СЊРєРѕ РёР· РѕСЃРЅРѕРІРЅРѕРіРѕ РєР°РґСЂР° СЂРµРЅРґРµСЂР° РјРёСЂР°
+        // (РЅР°РїСЂРёРјРµСЂ, РёР· GUI-РєРѕРЅС‚РµРєСЃС‚РѕРІ) вЂ” РµСЃР»Рё РєР°РјРµСЂС‹/hitResult РІ СЌС‚РѕС‚ РјРѕРјРµРЅС‚
+        // РЅРµС‚ СЃРјС‹СЃР»Р° С‚СЂРѕРіР°С‚СЊ, Р»СѓС‡С€Рµ РІС‹Р№С‚Рё. РњРёРЅРёРјР°Р»СЊРЅР°СЏ Р·Р°С‰РёС‚Р°:
+        if (mc.hitResult == null) {
+            return;
+        }
+
+        CursorState cursor = CursorState.getInstance();
+        float yaw = cursor.getInterpolatedYaw(partialTick);
+        float pitch = cursor.getInterpolatedPitch(partialTick);
+
+        Camera camera = mc.gameRenderer.getMainCamera();
+        Vec3 eyePos = camera.getPosition();
+
+        Vec3 viewVector = getViewVectorForRotation(yaw, pitch);
+        Vec3 endPos = eyePos.add(viewVector.scale(PICK_RANGE));
+
+        ClipContext.Block blockClip = player.isSpectator()
+                ? ClipContext.Block.VISUAL
+                : ClipContext.Block.COLLIDER;
+
+        HitResult result = level.clip(new ClipContext(
+                eyePos,
+                endPos,
+                blockClip,
+                ClipContext.Fluid.NONE,
+                player
+        ));
+
+        // РўСѓС‚ РїСЂРё РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё РґРѕР±Р°РІР»СЏРµС€СЊ entity-pick Р°РЅР°Р»РѕРіРёС‡РЅРѕ С‚РѕРјСѓ, С‡С‚Рѕ
+        // РґРµР»Р°РµС‚ С‚РІРѕР№ EntityPickMixin вЂ” РµСЃР»Рё РѕРЅ СѓР¶Рµ РїРµСЂРµС…РІР°С‚С‹РІР°РµС‚ getViewVector,
+        // РІРѕР·РјРѕР¶РЅРѕ, entity-С‡Р°СЃС‚СЊ РѕС‚СЂР°Р±РѕС‚Р°РµС‚ РєРѕСЂСЂРµРєС‚РЅРѕ СЃР°РјР° РїРѕ РёРЅС‚РµСЂРїРѕР»РёСЂРѕРІР°РЅРЅРѕРјСѓ
+        // РЅР°РїСЂР°РІР»РµРЅРёСЋ, Рё Р·РґРµСЃСЊ РґРѕСЃС‚Р°С‚РѕС‡РЅРѕ С‚РѕР»СЊРєРѕ Р±Р»РѕС‡РЅРѕР№ С‡Р°СЃС‚Рё.
+        mc.hitResult = result;
+    }
+
+    private static Vec3 getViewVectorForRotation(float yaw, float pitch) {
+        float f = pitch * ((float) Math.PI / 180F);
+        float f1 = -yaw * ((float) Math.PI / 180F);
+        float f2 = Mth.cos(f1);
+        float f3 = Mth.sin(f1);
+        float f4 = Mth.cos(f);
+        float f5 = Mth.sin(f);
+        return new Vec3((double) (f3 * f4), (double) (-f5), (double) (f2 * f4));
     }
 }
 ==========================================
@@ -114,101 +173,154 @@ PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\java\com\danilfb123\aasmov
 package com.danilfb123.aasmovement;
 
 import net.minecraft.util.Mth;
-import net.minecraft.world.phys.Vec3;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 /**
- * "Р’РёСЂС‚СѓР°Р»СЊРЅРѕРµ" РЅР°РїСЂР°РІР»РµРЅРёРµ РїСЂРёС†РµР»Р°, РѕС‚СЃС‚Р°СЋС‰РµРµ РѕС‚ РєР°РјРµСЂС‹.
+ * РҐСЂР°РЅРёС‚ РЅР°РїСЂР°РІР»РµРЅРёРµ РєСѓСЂСЃРѕСЂР° (РєСЂРµСЃС‚РёРєР°) РѕС‚РґРµР»СЊРЅРѕ РѕС‚ СЂРµР°Р»СЊРЅРѕР№ РєР°РјРµСЂС‹.
  *
- * Р’Р•Р РЎРРЇ 2: РґРѕР±Р°РІР»РµРЅР° С‚РµР»РµРјРµС‚СЂРёСЏ РјРёРєСЃРёРЅРѕРІ. Р РµРґРёСЂРµРєС‚С‹ РІ РјРёРєСЃРёРЅР°С…
- * РёРЅРєСЂРµРјРµРЅС‚РёСЂСѓСЋС‚ redirectCalls; РґРµР±Р°Рі-СЃС‚СЂРѕРєР° СЂР°Р· РІ СЃРµРєСѓРЅРґСѓ РїРµС‡Р°С‚Р°РµС‚
- * mixin=ALIVE / mixin=DEAD вЂ” СЃСЂР°Р·Сѓ РІРёРґРЅРѕ, РІРЅРµРґСЂРёР»РёСЃСЊ РјРёРєСЃРёРЅС‹ РёР»Рё РЅРµС‚.
- * РњРµС…Р°РЅРёРєР° РїСЂРё СЌС‚РѕРј СЂР°Р±РѕС‚Р°РµС‚ РІ Р»СЋР±РѕРј СЃР»СѓС‡Р°Рµ: hitResult РїРµСЂРµРїРёСЃС‹РІР°РµС‚СЃСЏ
- * СЃРѕР±С‹С‚РёСЏРјРё РІ MovementHandler (overrideHitResult).
+ * Р”РІР° РЅР°Р±РѕСЂР° Р·РЅР°С‡РµРЅРёР№:
+ *  - yawTick/pitchTick вЂ” "РёСЃС‚РёРЅР°" РЅР° РјРѕРјРµРЅС‚ РєРѕРЅС†Р° С‚РёРєР° N. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ С‚Р°Рј,
+ *    РіРґРµ Р»РѕРіРёРєР° С‚РёРєРѕРІР°СЏ (СЃС‚СЂРµР»СЊР±Р°, shootFromRotation) вЂ” Р±РµР· РёРЅС‚РµСЂРїРѕР»СЏС†РёРё,
+ *    РёРЅР°С‡Рµ СЂРµР·СѓР»СЊС‚Р°С‚ СЃС‚Р°РЅРµС‚ РЅРµРґРµС‚РµСЂРјРёРЅРёСЂРѕРІР°РЅРЅС‹Рј РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ С‚РёРєР°.
+ *  - prevYawTick/prevPitchTick вЂ” СЃРЅРёРјРѕРє СЃ С‚РёРєР° N-1, РЅСѓР¶РµРЅ С‚РѕР»СЊРєРѕ РґР»СЏ РёРЅС‚РµСЂРїРѕР»СЏС†РёРё.
+ *
+ * getInterpolatedYaw/Pitch(partialTick) вЂ” РґР»СЏ РІСЃРµРіРѕ, С‡С‚Рѕ СЂРёСЃСѓРµС‚СЃСЏ РІ СЂРµРЅРґРµСЂРµ
+ * (pick() -> hitResult, СЂСѓРєРё РІ ItemInHandRenderer), С‡С‚РѕР±С‹ РєСѓСЂСЃРѕСЂ РґРІРёРіР°Р»СЃСЏ
+ * РїР»Р°РІРЅРѕ РјРµР¶РґСѓ С‚РёРєР°РјРё СЃРёРЅС…СЂРѕРЅРЅРѕ СЃ РєР°РјРµСЂРѕР№, Р° РЅРµ РґС‘СЂРіР°Р»СЃСЏ РїРѕ С‚РёРєР°Рј.
  */
 public class CursorState {
 
-    // 0.02f вЂ” РўР•РЎРўРћР’РћР• Р·РЅР°С‡РµРЅРёРµ (Р»Р°Рі 2-3 СЃРµРєСѓРЅРґС‹). Р”Р»СЏ РёРіСЂС‹: 0.25f-0.5f.
-    public static float catchUpSpeed = 0.02f;
+    private static final CursorState INSTANCE = new CursorState();
 
-    public static float cursorYaw = 0.0f;
-    public static float cursorPitch = 0.0f;
-    public static float prevCursorYaw = 0.0f;
-    public static float prevCursorPitch = 0.0f;
+    public static CursorState getInstance() {
+        return INSTANCE;
+    }
 
-    // РЎС‡С‘С‚С‡РёРє РІС‹Р·РѕРІРѕРІ СЂРµРґРёСЂРµРєС‚РѕРІ РёР· РјРёРєСЃРёРЅРѕРІ (СЃРј. EntityPickMixin Рё
-    // GameRendererPickMixin). Р Р°СЃС‚С‘С‚ -> РјРёРєСЃРёРЅС‹ Р¶РёРІС‹ Рё РґР°СЋС‚
-    // РїРѕРєР°РґСЂРѕРІСѓСЋ С‚РѕС‡РЅРѕСЃС‚СЊ СЂРµР№РєР°СЃС‚Р°. РЎС‚РѕРёС‚ РЅР° РјРµСЃС‚Рµ -> РјРёРєСЃРёРЅС‹ РЅРµ
-    // РІРЅРµРґСЂРёР»РёСЃСЊ, СЂР°Р±РѕС‚Р°РµС‚ СЃРѕР±С‹С‚РёР№РЅС‹Р№ override (С‚РѕР¶Рµ РѕРє).
-    public static long redirectCalls = 0;
+    private float yawTick;
+    private float pitchTick;
+    private float prevYawTick;
+    private float prevPitchTick;
 
-    private static boolean initialized = false;
-    private static long lastLoggedRedirects = 0;
+    private boolean initialized = false;
 
-    private static final Logger LOGGER = LogManager.getLogger("AASMovement/CursorState");
-    private static int debugTickCounter = 0;
-
-    public static void tick(float realYaw, float realPitch) {
-        prevCursorYaw = cursorYaw;
-        prevCursorPitch = cursorPitch;
-
-        debugTickCounter++;
-        if (debugTickCounter % 20 == 0) {
-            boolean alive = redirectCalls > lastLoggedRedirects;
-            lastLoggedRedirects = redirectCalls;
-            LOGGER.info("[AASMovement DEBUG] realYaw={}, cursorYaw={}, delta={}, mixin={}",
-                    realYaw, cursorYaw,
-                    Mth.wrapDegrees(realYaw - cursorYaw),
-                    alive ? "ALIVE (" + redirectCalls + ")" : "DEAD");
-        }
-
+    /**
+     * Р’С‹Р·С‹РІР°С‚СЊ РѕРґРёРЅ СЂР°Р· РІ РєРѕРЅС†Рµ РєР°Р¶РґРѕРіРѕ С‚РёРєР° (РЅР°РїСЂРёРјРµСЂ, ClientTickEvent.END),
+     * РџРћРЎР›Р• С‚РѕРіРѕ РєР°Рє РїРѕСЃС‡РёС‚Р°РЅРѕ РЅРѕРІРѕРµ "РѕС‚Р»РѕР¶РµРЅРЅРѕРµ" РЅР°РїСЂР°РІР»РµРЅРёРµ РєСѓСЂСЃРѕСЂР°.
+     */
+    public void tick(float newYaw, float newPitch) {
         if (!initialized) {
-            cursorYaw = realYaw;
-            cursorPitch = realPitch;
-            prevCursorYaw = realYaw;
-            prevCursorPitch = realPitch;
+            // РЅР° РїРµСЂРІРѕРј С‚РёРєРµ РЅРµ РґР°С‘Рј РґРµР»СЊС‚Рµ prev->current Р±С‹С‚СЊ "СЃ РЅСѓР»СЏ"
+            prevYawTick = newYaw;
+            prevPitchTick = newPitch;
             initialized = true;
+        } else {
+            prevYawTick = yawTick;
+            prevPitchTick = pitchTick;
+        }
+        yawTick = newYaw;
+        pitchTick = newPitch;
+    }
+
+    /** Р§РёСЃС‚Рѕ С‚РёРєРѕРІРѕРµ Р·РЅР°С‡РµРЅРёРµ вЂ” РґР»СЏ shootFromRotation Рё РїСЂРѕС‡РµР№ С‚РёРєРѕРІРѕР№ Р»РѕРіРёРєРё. */
+    public float getYawTick() {
+        return yawTick;
+    }
+
+    public float getPitchTick() {
+        return pitchTick;
+    }
+
+    /**
+     * РРЅС‚РµСЂРїРѕР»РёСЂРѕРІР°РЅРЅС‹Р№ yaw СЃ СѓС‡С‘С‚РѕРј РїРµСЂРµС…РѕРґР° С‡РµСЂРµР· В±180В°.
+     * РСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РІ СЂРµРЅРґРµСЂРµ (pick(), СЂСѓРєРё), partialTick Р±СЂР°С‚СЊ РёР· С‚РѕРіРѕ Р¶Рµ
+     * РјРµСЃС‚Р°, РѕС‚РєСѓРґР° РµРіРѕ Р±РµСЂС‘С‚ РІР°РЅРёР»СЊ РІ РєРѕРЅРєСЂРµС‚РЅРѕР№ С‚РѕС‡РєРµ РёРЅР¶РµРєС‚Р°.
+     */
+    public float getInterpolatedYaw(float partialTick) {
+        return rotLerp(partialTick, prevYawTick, yawTick);
+    }
+
+    /** Pitch РЅРµ С†РёРєР»РёС‡РµРЅ РІ РёРіСЂРµ, РѕР±С‹С‡РЅС‹Р№ lerp РєРѕСЂСЂРµРєС‚РµРЅ. */
+    public float getInterpolatedPitch(float partialTick) {
+        return Mth.lerp(partialTick, prevPitchTick, pitchTick);
+    }
+
+    /**
+     * РђРЅР°Р»РѕРі Mth.rotLerp вЂ” РёРЅС‚РµСЂРїРѕР»СЏС†РёСЏ СѓРіР»Р° СЃ СѓС‡С‘С‚РѕРј С†РёРєР»РёС‡РЅРѕСЃС‚Рё (РєСЂР°С‚С‡Р°Р№С€РёР№ РїСѓС‚СЊ).
+     * Р’ РЅРѕРІС‹С… РјР°РїРїРёРЅРіР°С… РјРѕР¶РµС‚ СѓР¶Рµ РЅР°Р·С‹РІР°С‚СЊСЃСЏ Mth.rotLerp/Mth.wrapDegrees вЂ” РµСЃР»Рё РµСЃС‚СЊ,
+     * РёСЃРїРѕР»СЊР·СѓР№ РІР°РЅРёР»СЊРЅС‹Р№, СЌС‚РѕС‚ РґСѓР±Р»РёСЂСѓРµС‚ РµРіРѕ Р»РѕРіРёРєСѓ РЅР° СЃР»СѓС‡Р°Р№ РѕС‚СЃСѓС‚СЃС‚РІРёСЏ РІ С‚РІРѕРµР№ РІРµСЂСЃРёРё.
+     */
+    private static float rotLerp(float delta, float start, float end) {
+        float diff = Mth.wrapDegrees(end - start);
+        return start + delta * diff;
+    }
+}
+==========================================
+FILE: Iteminhandrenderermixin.java
+PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\java\com\danilfb123\aasmovement\Iteminhandrenderermixin.java
+==========================================
+package com.danilfb123.aasmovement;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.renderer.ItemInHandRenderer;
+import net.minecraft.util.Mth;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import yourmod.client.CursorState;
+
+/**
+ * Р Р°Р·РІРѕСЂР°С‡РёРІР°РµС‚ СЂСѓРєРё РїРµСЂРІРѕРіРѕ Р»РёС†Р° РЅР° РґРµР»СЊС‚Сѓ РјРµР¶РґСѓ СЂРµР°Р»СЊРЅС‹Рј РїРѕРІРѕСЂРѕС‚РѕРј РєР°РјРµСЂС‹
+ * Рё РЅР°РїСЂР°РІР»РµРЅРёРµРј CursorState вЂ” С‚РѕР»СЊРєРѕ survival/adventure, С‚РѕР»СЊРєРѕ РґР»СЏ
+ * Р»РѕРєР°Р»СЊРЅРѕРіРѕ РёРіСЂРѕРєР°. Р’ РєСЂРµР°С‚РёРІРµ СЂСѓРєРё РєР°Рє РІ РІР°РЅРёР»Рё.
+ *
+ * Р”РµР»СЊС‚Р° Р±РµСЂС‘С‚СЃСЏ РјРµР¶РґСѓ Р Р•РђР›Р¬РќР«Рњ yaw/pitch РєР°РјРµСЂС‹ РЅР° СЌС‚РѕС‚ РєР°РґСЂ Рё
+ * РёРЅС‚РµСЂРїРѕР»РёСЂРѕРІР°РЅРЅС‹Рј yaw/pitch РєСѓСЂСЃРѕСЂР° вЂ” РЅРµ РјРµР¶РґСѓ РєР°РґСЂР°РјРё СЂСѓРє, РёРЅР°С‡Рµ Р±СѓРґРµС‚
+ * РїР»Р°РІР°С‚СЊ РїСЂРё СЂРµР·РєРёС… РґРІРёР¶РµРЅРёСЏС… РјС‹С€Рё.
+ *
+ * MAX_LAG_DEGREES вЂ” РєР»СЌРјРї РјР°РєСЃРёРјР°Р»СЊРЅРѕРіРѕ СѓРіР»Р° "РѕС‚СЃС‚Р°РІР°РЅРёСЏ", С‡С‚РѕР±С‹ РїСЂРё Р±С‹СЃС‚СЂРѕРј
+ * РІСЂР°С‰РµРЅРёРё РјС‹С€СЊСЋ СЂСѓРєРё РЅРµ СѓР»РµС‚Р°Р»Рё РІ СЃС‚РѕСЂРѕРЅСѓ РЅРµРµСЃС‚РµСЃС‚РІРµРЅРЅРѕ РґР°Р»РµРєРѕ.
+ */
+@Mixin(ItemInHandRenderer.class)
+public abstract class ItemInHandRendererMixin {
+
+    private static final float MAX_LAG_DEGREES = 20.0F;
+
+    // Р—Р°РјРµРЅРё "renderHandsWithItems" РЅР° Р°РєС‚СѓР°Р»СЊРЅРѕРµ РёРјСЏ РјРµС‚РѕРґР° РІ С‚РІРѕРµР№ РІРµСЂСЃРёРё
+    // РјР°РїРїРёРЅРіРѕРІ, РµСЃР»Рё РѕРЅРѕ РґСЂСѓРіРѕРµ (РјРѕР¶РµС‚ РѕС‚Р»РёС‡Р°С‚СЊСЃСЏ РјРµР¶РґСѓ РІРµСЂСЃРёСЏРјРё MC).
+    @Inject(method = "renderHandsWithItems", at = @At("HEAD"))
+    private void yourmod$offsetHandsPoseStack(float partialTick, PoseStack poseStack,
+                                              Object multiBufferSource, Object player,
+                                              int packedLight, CallbackInfo ci) {
+        Minecraft mc = Minecraft.getInstance();
+        LocalPlayer localPlayer = mc.player;
+        if (localPlayer == null) {
+            return;
+        }
+        if (localPlayer.isCreative() || localPlayer.isSpectator()) {
             return;
         }
 
-        cursorYaw += Mth.wrapDegrees(realYaw - cursorYaw) * catchUpSpeed;
-        cursorPitch = Mth.lerp(catchUpSpeed, cursorPitch,
-                Mth.clamp(realPitch, -90.0f, 90.0f));
-    }
+        CursorState cursor = CursorState.getInstance();
 
-    public static void reset() {
-        initialized = false;
-        debugTickCounter = 0;
-        redirectCalls = 0;
-        lastLoggedRedirects = 0;
-    }
+        float realYaw = Mth.lerp(partialTick, localPlayer.yRotO, localPlayer.getYRot());
+        float realPitch = Mth.lerp(partialTick, localPlayer.xRotO, localPlayer.getXRot());
 
-    // РРЅС‚РµСЂРїРѕР»СЏС†РёСЏ РїРѕ РєСЂР°С‚С‡Р°Р№С€РµР№ РґСѓРіРµ (С„РёРєСЃ РєСѓРІС‹СЂРєР° РЅР° +/-180)
-    public static float getInterpolatedYaw(float partialTick) {
-        return prevCursorYaw
-                + Mth.wrapDegrees(cursorYaw - prevCursorYaw) * partialTick;
-    }
+        float cursorYaw = cursor.getInterpolatedYaw(partialTick);
+        float cursorPitch = cursor.getInterpolatedPitch(partialTick);
 
-    public static float getInterpolatedPitch(float partialTick) {
-        return Mth.lerp(partialTick, prevCursorPitch, cursorPitch);
-    }
+        float deltaYaw = Mth.wrapDegrees(cursorYaw - realYaw);
+        float deltaPitch = Mth.wrapDegrees(cursorPitch - realPitch);
 
-    public static Vec3 getInterpolatedDirection(float partialTick) {
-        return calculateViewVector(
-                getInterpolatedPitch(partialTick),
-                getInterpolatedYaw(partialTick));
-    }
+        deltaYaw = Mth.clamp(deltaYaw, -MAX_LAG_DEGREES, MAX_LAG_DEGREES);
+        deltaPitch = Mth.clamp(deltaPitch, -MAX_LAG_DEGREES, MAX_LAG_DEGREES);
 
-    // РљРѕРїРёСЏ С„РѕСЂРјСѓР»С‹ Entity#calculateViewVector
-    private static Vec3 calculateViewVector(float pitch, float yaw) {
-        float f = pitch * ((float) Math.PI / 180F);
-        float f1 = -yaw * ((float) Math.PI / 180F);
-        float f2 = Mth.cos(f1);
-        float f3 = Mth.sin(f1);
-        float f4 = Mth.cos(f);
-        float f5 = Mth.sin(f);
-        return new Vec3((double) (f3 * f4), (double) (-f5), (double) (f2 * f4));
+        // Р Р°Р·РІРѕСЂР°С‡РёРІР°РµРј РјР°С‚СЂРёС†Сѓ СЂСѓРє РЅР° РґРµР»СЊС‚Сѓ. Р—РЅР°РєРё/РѕСЃРё РїРѕРґР±РµСЂРё РїРѕ С„Р°РєС‚Сѓ вЂ”
+        // Р·Р°РІРёСЃРёС‚ РѕС‚ С‚РѕРіРѕ, РІ РєР°РєРѕР№ РјРѕРјРµРЅС‚ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ РѕСЃС‚Р°Р»СЊРЅС‹С… С‚СЂР°РЅСЃС„РѕСЂРјР°С†РёР№
+        // СЂСѓРє СЃС‚РѕРёС‚ СЌС‚РѕС‚ РёРЅР¶РµРєС‚ (РґРѕ/РїРѕСЃР»Рµ mulPose(camera rotation)).
+        poseStack.mulPose(com.mojang.math.Axis.YP.rotationDegrees(-deltaYaw));
+        poseStack.mulPose(com.mojang.math.Axis.XP.rotationDegrees(deltaPitch));
     }
 }
 ==========================================
@@ -468,6 +580,67 @@ public class MovementHandler {
                 gui.renderItemDecorations(mc.font, stack, x + 3, y + 3);
             }
         }
+    }
+}
+==========================================
+FILE: Projectileshootmixin.java
+PATH: C:\Users\user\Desktop\mods\AAS movment\src\main\java\com\danilfb123\aasmovement\Projectileshootmixin.java
+==========================================
+package com.danilfb123.aasmovement;
+
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.projectile.Projectile;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
+import com.danilfb123.aasmovement.CursorState;
+
+/**
+ * shootFromRotation(Entity shooter, float rotX, float rotY, float rotZOffset,
+ *                    float velocity, float inaccuracy)
+ * вЂ” РѕР±С‰Р°СЏ С‚РѕС‡РєР° РґР»СЏ Р»СѓРєР°/Р°СЂР±Р°Р»РµС‚Р°/С‚СЂРµР·СѓР±С†Р°/СЃРЅРµР¶РєРѕРІ/СЏРёС†/Р·РµР»РёР№/Р¶РµРјС‡СѓРіР°/СЃС‚СЂРµР»С‹ РѕРїС‹С‚Р°.
+ *
+ * РџРѕРґРјРµРЅСЏРµРј rotX/rotY РЅР° РўРРљРћР’РћР• (РЅРµ РёРЅС‚РµСЂРїРѕР»РёСЂРѕРІР°РЅРЅРѕРµ) РЅР°РїСЂР°РІР»РµРЅРёРµ РєСѓСЂСЃРѕСЂР°,
+ * С‚РѕР»СЊРєРѕ РµСЃР»Рё СЃС‚СЂРµР»РѕРє вЂ” Р»РѕРєР°Р»СЊРЅС‹Р№ РёРіСЂРѕРє Рё РЅРµ РІ РєСЂРµР°С‚РёРІРµ. rotZOffset РЅРµ С‚СЂРѕРіР°РµРј вЂ”
+ * СЌС‚Рѕ СѓРіР»РѕРІРѕР№ РѕС„С„СЃРµС‚ multishot Сѓ Р°СЂР±Р°Р»РµС‚Р°, РїСЂРёРјРµРЅСЏРµС‚СЃСЏ РїРѕРІРµСЂС… Р±Р°Р·РѕРІРѕРіРѕ rotX/rotY
+ * СѓР¶Рµ РґР°Р»СЊС€Рµ РїРѕ РєРѕРґСѓ РІР°РЅРёР»Рё, С‚Р°Рє С‡С‚Рѕ multishot РЅРµ Р»РѕРјР°РµС‚СЃСЏ.
+ *
+ * @ModifyVariable СЃ argsOnly=true РЅСѓРјРµСЂСѓРµС‚ РёРјРµРЅРЅРѕ РїР°СЂР°РјРµС‚СЂС‹ РјРµС‚РѕРґР°, Р±РµР· "this":
+ *   0 = shooter, 1 = rotX, 2 = rotY, 3 = rotZOffset, 4 = velocity, 5 = inaccuracy.
+ * Р•СЃР»Рё РјР°РїРїРёРЅРіРё РґСЂСѓРіРёРµ Рё РїРѕСЂСЏРґРѕРє РїР°СЂР°РјРµС‚СЂРѕРІ РѕС‚Р»РёС‡Р°РµС‚СЃСЏ вЂ” РїСЂРѕРІРµСЂСЊ СЃРёРіРЅР°С‚СѓСЂСѓ
+ * Рё РїРѕРїСЂР°РІСЊ index.
+ */
+@Mixin(Projectile.class)
+public abstract class ProjectileShootMixin {
+
+    @ModifyVariable(method = "shootFromRotation", at = @At("HEAD"), argsOnly = true, index = 1)
+    private static float yourmod$modifyRotX(float rotX, Entity shooter) {
+        if (!shouldOverride(shooter)) {
+            return rotX;
+        }
+        return CursorState.getInstance().getPitchTick();
+    }
+
+    @ModifyVariable(method = "shootFromRotation", at = @At("HEAD"), argsOnly = true, index = 2)
+    private static float yourmod$modifyRotY(float rotY, Entity shooter) {
+        if (!shouldOverride(shooter)) {
+            return rotY;
+        }
+        return CursorState.getInstance().getYawTick();
+    }
+
+    private static boolean shouldOverride(Entity shooter) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) {
+            return false;
+        }
+        // РРјРµРЅРЅРѕ Р»РѕРєР°Р»СЊРЅС‹Р№ РёРіСЂРѕРє, РЅРµ instanceof Player вЂ” РёРЅР°С‡Рµ Р»РѕРіРёРєР° РјРѕРіР»Р° Р±С‹
+        // СЃР»СѓС‡Р°Р№РЅРѕ Р·Р°РґРµС‚СЊ РґСЂСѓРіРёС… РёРіСЂРѕРєРѕРІ/СЃСѓС‰РЅРѕСЃС‚РµР№ (РІ С‚.С‡. РЅР° СЃРµСЂРІРµСЂРµ).
+        if (shooter != mc.player) {
+            return false;
+        }
+        return !mc.player.isCreative();
     }
 }
 ==========================================

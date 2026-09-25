@@ -2,93 +2,156 @@ package com.danilfb123.aasmovement;
 
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 /**
- * "Виртуальное" направление прицела, отстающее от камеры.
+ * Хранит направление курсора (крестика) отдельно от реальной камеры.
+ * Полностью статический класс — используется как CursorState.tick(...),
+ * CursorState.getInterpolatedYaw(...) и т.д., без instance/getInstance().
  *
- * ВЕРСИЯ 2: добавлена телеметрия миксинов. Редиректы в миксинах
- * инкрементируют redirectCalls; дебаг-строка раз в секунду печатает
- * mixin=ALIVE / mixin=DEAD — сразу видно, внедрились миксины или нет.
- * Механика при этом работает в любом случае: hitResult переписывается
- * событиями в MovementHandler (overrideHitResult).
+ * Два набора значений:
+ *  - yawTick/pitchTick — "истина" на момент конца тика N. Используется там,
+ *    где логика тиковая (стрельба, shootFromRotation) — без интерполяции,
+ *    иначе результат станет недетерминированным относительно тика.
+ *  - prevYawTick/prevPitchTick — снимок с тика N-1, нужен только для интерполяции.
+ *
+ * getInterpolatedYaw/Pitch(partialTick) — для всего, что рисуется в рендере
+ * (pick() -> hitResult, руки, крестик), чтобы курсор двигался плавно между
+ * тиками синхронно с камерой, а не дёргался по тикам.
  */
 public class CursorState {
 
-    // 0.02f — ТЕСТОВОЕ значение (лаг 2-3 секунды). Для игры: 0.25f-0.5f.
-    public static float catchUpSpeed = 0.02f;
-
-    public static float cursorYaw = 0.0f;
-    public static float cursorPitch = 0.0f;
-    public static float prevCursorYaw = 0.0f;
-    public static float prevCursorPitch = 0.0f;
-
-    // Счётчик вызовов редиректов из миксинов (см. EntityPickMixin и
-    // GameRendererPickMixin). Растёт -> миксины живы и дают
-    // покадровую точность рейкаста. Стоит на месте -> миксины не
-    // внедрились, работает событийный override (тоже ок).
-    public static long redirectCalls = 0;
+    private static float yawTick;
+    private static float pitchTick;
+    private static float prevYawTick;
+    private static float prevPitchTick;
 
     private static boolean initialized = false;
-    private static long lastLoggedRedirects = 0;
 
-    private static final Logger LOGGER = LogManager.getLogger("AASMovement/CursorState");
-    private static int debugTickCounter = 0;
+    /**
+     * Время "довоза" курсора к реальному повороту, в секундах — насколько
+     * сильно крестик/руки/прицел отстают от настоящей камеры перед тем как
+     * её догнать. ДЛЯ ТЕСТОВ поставлено 3.0f (абсурдно много, чтобы отставание
+     * было хорошо видно). Для нормальной игры это будет что-то около 0.1–0.2f.
+     */
+    private static float delaySeconds = 3.0f;
 
-    public static void tick(float realYaw, float realPitch) {
-        prevCursorYaw = cursorYaw;
-        prevCursorPitch = cursorPitch;
+    /** Тиков в секунду — используется для перевода delaySeconds в коэффициент сглаживания. */
+    private static final float TICKS_PER_SECOND = 20.0f;
 
-        debugTickCounter++;
-        if (debugTickCounter % 20 == 0) {
-            boolean alive = redirectCalls > lastLoggedRedirects;
-            lastLoggedRedirects = redirectCalls;
-            LOGGER.info("[AASMovement DEBUG] realYaw={}, cursorYaw={}, delta={}, mixin={}",
-                    realYaw, cursorYaw,
-                    Mth.wrapDegrees(realYaw - cursorYaw),
-                    alive ? "ALIVE (" + redirectCalls + ")" : "DEAD");
-        }
+    /** Счётчик телеметрии — сколько раз EntityPickMixin подменил getViewVector. */
+    public static long redirectCalls = 0;
 
+    private CursorState() {
+    }
+
+    /**
+     * Вызывать один раз в конце каждого тика (ClientTickEvent.END) с
+     * АКТУАЛЬНЫМ поворотом игрока (player.getYRot()/getXRot()) — это цель,
+     * к которой курсор плавно "довозится", а не значение, которое просто
+     * копируется.
+     */
+    public static void tick(float targetYaw, float targetPitch) {
         if (!initialized) {
-            cursorYaw = realYaw;
-            cursorPitch = realPitch;
-            prevCursorYaw = realYaw;
-            prevCursorPitch = realPitch;
+            // на первом тике (например, вход в мир) не тащим курсор откуда-то
+            // из нуля — сразу ставим его туда же, где реальный поворот.
+            yawTick = targetYaw;
+            pitchTick = targetPitch;
+            prevYawTick = targetYaw;
+            prevPitchTick = targetPitch;
             initialized = true;
             return;
         }
 
-        cursorYaw += Mth.wrapDegrees(realYaw - cursorYaw) * catchUpSpeed;
-        cursorPitch = Mth.lerp(catchUpSpeed, cursorPitch,
-                Mth.clamp(realPitch, -90.0f, 90.0f));
+        prevYawTick = yawTick;
+        prevPitchTick = pitchTick;
+
+        float alpha = tickAlpha();
+
+        // yaw цикличен (переход через ±180°) — двигаемся к цели по кратчайшей
+        // дуге, а не по прямой разнице.
+        float yawDiff = Mth.wrapDegrees(targetYaw - yawTick);
+        yawTick = yawTick + yawDiff * alpha;
+
+        pitchTick = pitchTick + (targetPitch - pitchTick) * alpha;
     }
 
+    /**
+     * Доля пути к цели, проходимая за один тик, при текущем delaySeconds.
+     * Экспоненциальное сглаживание: alpha = 1 - e^(-1 / (delaySeconds * tps)).
+     * При delaySeconds -> 0 alpha -> 1 (мгновенно, как раньше).
+     */
+    private static float tickAlpha() {
+        if (delaySeconds <= 0.0f) {
+            return 1.0f;
+        }
+        return 1.0f - (float) Math.exp(-1.0 / (delaySeconds * TICKS_PER_SECOND));
+    }
+
+    /** Позволяет менять задержку в рантайме (например, командой) без пересборки. */
+    public static void setDelaySeconds(float seconds) {
+        delaySeconds = Math.max(0.0f, seconds);
+    }
+
+    public static float getDelaySeconds() {
+        return delaySeconds;
+    }
+
+    /**
+     * Сброс состояния (например, при выходе из мира — ClientPlayerNetworkEvent.LoggingOut),
+     * чтобы после захода в новый мир не было скачка интерполяции от старых значений.
+     */
     public static void reset() {
         initialized = false;
-        debugTickCounter = 0;
-        redirectCalls = 0;
-        lastLoggedRedirects = 0;
+        yawTick = 0f;
+        pitchTick = 0f;
+        prevYawTick = 0f;
+        prevPitchTick = 0f;
     }
 
-    // Интерполяция по кратчайшей дуге (фикс кувырка на +/-180)
+    /** Чисто тиковое значение — для shootFromRotation и прочей тиковой логики. */
+    public static float getYawTick() {
+        return yawTick;
+    }
+
+    public static float getPitchTick() {
+        return pitchTick;
+    }
+
+    /**
+     * Интерполированный yaw с учётом перехода через ±180°.
+     * Использовать в рендере (pick(), руки, крестик), partialTick брать из
+     * того же места, откуда его берёт ваниль в конкретной точке инжекта.
+     */
     public static float getInterpolatedYaw(float partialTick) {
-        return prevCursorYaw
-                + Mth.wrapDegrees(cursorYaw - prevCursorYaw) * partialTick;
+        return rotLerp(partialTick, prevYawTick, yawTick);
     }
 
+    /** Pitch не цикличен в игре, обычный lerp корректен. */
     public static float getInterpolatedPitch(float partialTick) {
-        return Mth.lerp(partialTick, prevCursorPitch, cursorPitch);
+        return Mth.lerp(partialTick, prevPitchTick, pitchTick);
     }
 
+    /**
+     * Аналог Mth.rotLerp — интерполяция угла с учётом цикличности (кратчайший путь).
+     * В новых маппингах может уже называться Mth.rotLerp — если есть, используй
+     * ванильный, этот дублирует его логику на случай отсутствия в твоей версии.
+     */
+    private static float rotLerp(float delta, float start, float end) {
+        float diff = Mth.wrapDegrees(end - start);
+        return start + delta * diff;
+    }
+
+    /**
+     * Готовый view-вектор (а не отдельно yaw/pitch) — для мест типа
+     * EntityPickMixin, который редиректит Entity#getViewVector(float).
+     */
     public static Vec3 getInterpolatedDirection(float partialTick) {
-        return calculateViewVector(
-                getInterpolatedPitch(partialTick),
-                getInterpolatedYaw(partialTick));
+        float yaw = getInterpolatedYaw(partialTick);
+        float pitch = getInterpolatedPitch(partialTick);
+        return viewVectorFromRotation(yaw, pitch);
     }
 
-    // Копия формулы Entity#calculateViewVector
-    private static Vec3 calculateViewVector(float pitch, float yaw) {
+    private static Vec3 viewVectorFromRotation(float yaw, float pitch) {
         float f = pitch * ((float) Math.PI / 180F);
         float f1 = -yaw * ((float) Math.PI / 180F);
         float f2 = Mth.cos(f1);
